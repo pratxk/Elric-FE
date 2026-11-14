@@ -5,7 +5,15 @@ import { BackendBanner, Card, CardHeader, LiveTag, MockTag, StatusPill } from "@
 import MoneyChart from "@/components/MoneyChart";
 import { dashboard, invoices as mockInvoices, moneyMovement, vendors, type InvoiceStatus } from "@/lib/mock-data";
 import { ageDays, formatDate, inr, inrCompact } from "@/lib/format";
-import { getMetrics, listInvoices, useApi, type ApiInvoice } from "@/lib/api";
+import {
+  getForecast,
+  getMetrics,
+  getPayments,
+  getVendorSummaries,
+  listInvoices,
+  useApi,
+  type ApiInvoice,
+} from "@/lib/api";
 
 const actionPills = [
   { label: "Upload Invoice", href: "/inbox", primary: true },
@@ -18,10 +26,23 @@ function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
 }
 
+/** Short week label, e.g. "15 Nov". */
+function shortWeekLabel(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
 export default function DashboardPage() {
   const metrics = useApi(getMetrics);
   const invList = useApi(listInvoices);
+  const vendorList = useApi(getVendorSummaries);
+  const paymentList = useApi(getPayments);
+  const forecast = useApi(getForecast);
   const live = metrics.data !== null && invList.data !== null;
+  const vendorsLive = vendorList.data !== null;
+  const paymentsLive = paymentList.data !== null;
+  const forecastLive = forecast.data !== null;
   const backendDown = metrics.error !== null && invList.error !== null;
 
   const m = metrics.data;
@@ -30,10 +51,7 @@ export default function DashboardPage() {
   // Pipeline derived from real by_status + invoice totals (live) or mock.
   const byStatus = m?.by_status ?? {};
   const openCount = live
-    ? ["received", "extracted", "validated", "matched", "flagged", "on_hold"].reduce(
-        (s, k) => s + (byStatus[k] ?? 0),
-        0,
-      )
+    ? realInvoices.filter((i) => !["paid", "rejected", "duplicate"].includes(i.status)).length
     : dashboard.pipeline.open;
   const paidCount = live ? (byStatus.paid ?? 0) : dashboard.pipeline.paid;
   const openValue = live
@@ -46,10 +64,33 @@ export default function DashboardPage() {
     : dashboard.pipeline.paidValue;
 
   const recent = live ? realInvoices.slice(0, 5) : mockInvoices.slice(0, 5);
-  const topVendors = [...vendors].sort((a, b) => b.balance - a.balance).slice(0, 5);
+  // Vendor balances: live open AP per vendor from /api/vendors. The
+  // backend has no reliability history, so that score is not shown live.
+  const liveTopVendors = (vendorList.data ?? []).slice(0, 5);
+  const mockTopVendors = [...vendors].sort((a, b) => b.balance - a.balance).slice(0, 5);
 
   const pendingTotal = live ? (m?.money_in_exceptions_inr ?? 0) : dashboard.pendingApprovalTotal;
   const pendingCount = live ? (m?.exceptions_open ?? 0) : dashboard.pendingApprovalCount;
+
+  // Money movement: live paid vs scheduled totals from /api/payments.
+  const payments = paymentList.data ?? [];
+  const paidTotal = payments.filter((p) => p.status === "paid").reduce((s, p) => s + p.amount, 0);
+  const scheduledTotal = payments
+    .filter((p) => p.status === "scheduled")
+    .reduce((s, p) => s + p.amount, 0);
+  const nextPayment = payments
+    .filter((p) => p.status === "scheduled")
+    .map((p) => p.scheduled_date)
+    .sort()[0];
+
+  // Chart: live projected outflows by week from /api/forecast (AP has
+  // no money-in, so the chart shows outflows only when live).
+  const chartLabels = forecastLive
+    ? forecast.data!.weekly_outflows.map((w) => shortWeekLabel(w.week_start))
+    : moneyMovement.labels;
+  const chartOut = forecastLive
+    ? forecast.data!.weekly_outflows.map((w) => w.projected_outflow_inr)
+    : moneyMovement.moneyOut;
 
   return (
     <div>
@@ -64,7 +105,17 @@ export default function DashboardPage() {
         {live ? <LiveTag /> : <MockTag />}
       </div>
 
-      {backendDown && <BackendBanner onRetry={() => { metrics.refresh(); invList.refresh(); }} />}
+      {backendDown && (
+        <BackendBanner
+          onRetry={() => {
+            metrics.refresh();
+            invList.refresh();
+            vendorList.refresh();
+            paymentList.refresh();
+            forecast.refresh();
+          }}
+        />
+      )}
       {metrics.loading && invList.loading && (
         <p className="mt-5 text-sm text-muted">Loading live data from the backend…</p>
       )}
@@ -97,22 +148,34 @@ export default function DashboardPage() {
           <div className="px-5 pt-2">
             <p className="text-[32px] font-semibold leading-9 text-ink tnum">{inr(pendingTotal)}</p>
             <div className="mt-2 flex items-center gap-4 text-sm">
-              <span className="text-muted">Last 30 days</span>
-              <span className="inline-flex items-center gap-1 font-medium text-money-in tnum">
-                ↗ {inrCompact(dashboard.moneyIn30d)} in
-              </span>
-              <span className="inline-flex items-center gap-1 font-medium text-money-out tnum">
-                ↘ −{inrCompact(dashboard.moneyOut30d)} out
-              </span>
-              <MockTag />
+              {forecastLive ? (
+                <span className="inline-flex items-center gap-1 font-medium text-money-out tnum">
+                  ↘ {inrCompact(forecast.data!.total_projected_inr)} projected out · next 4 wks
+                </span>
+              ) : (
+                <>
+                  <span className="text-muted">Last 30 days</span>
+                  <span className="inline-flex items-center gap-1 font-medium text-money-in tnum">
+                    ↗ {inrCompact(dashboard.moneyIn30d)} in
+                  </span>
+                  <span className="inline-flex items-center gap-1 font-medium text-money-out tnum">
+                    ↘ −{inrCompact(dashboard.moneyOut30d)} out
+                  </span>
+                  <MockTag />
+                </>
+              )}
             </div>
             <p className="mt-3 text-sm text-muted">
               Cash position <span className="font-medium text-ink tnum">{inr(dashboard.cashPosition)}</span> · HDFC Current A/c ·{" "}
-              <span className="text-xs">demo figure</span>
+              <span className="text-xs">demo figure — no bank feed connected</span>
             </p>
           </div>
           <div className="px-5 pb-5 pt-4">
-            <MoneyChart labels={moneyMovement.labels} moneyIn={moneyMovement.moneyIn} moneyOut={moneyMovement.moneyOut} />
+            {forecastLive ? (
+              <MoneyChart labels={chartLabels} moneyIn={[]} moneyOut={chartOut} showIn={false} />
+            ) : (
+              <MoneyChart labels={moneyMovement.labels} moneyIn={moneyMovement.moneyIn} moneyOut={moneyMovement.moneyOut} />
+            )}
           </div>
         </Card>
 
@@ -121,7 +184,7 @@ export default function DashboardPage() {
             title="Vendor balances"
             action={
               <span className="flex items-center gap-2">
-                <MockTag />
+                {!vendorsLive && <MockTag />}
                 <Link href="/vendors" className="text-sm font-medium text-primary hover:text-primary-dark">
                   View all
                 </Link>
@@ -129,20 +192,38 @@ export default function DashboardPage() {
             }
           />
           <ul className="px-2 pb-3 pt-2">
-            {topVendors.map((v) => (
-              <li key={v.id}>
-                <Link href="/vendors" className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-slate-50">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-xs font-semibold text-primary-dark">
-                    {v.name.slice(0, 1)}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-ink">{v.name}</span>
-                    <span className="block text-xs text-muted">Reliability {v.reliability}% · {v.openInvoices} open</span>
-                  </span>
-                  <span className="text-sm font-medium text-ink tnum">{inr(v.balance)}</span>
-                </Link>
-              </li>
-            ))}
+            {vendorsLive
+              ? liveTopVendors.map((v) => (
+                  <li key={v.vendor_id}>
+                    <Link href="/vendors" className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-slate-50">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-xs font-semibold text-primary-dark">
+                        {v.vendor_name.slice(0, 1)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-ink">{v.vendor_name}</span>
+                        <span className="block text-xs text-muted">
+                          {v.open_count} open ·{" "}
+                          {v.last_invoice_date ? `last ${formatDate(v.last_invoice_date)}` : "no invoices"}
+                        </span>
+                      </span>
+                      <span className="text-sm font-medium text-ink tnum">{inr(v.open_balance_inr)}</span>
+                    </Link>
+                  </li>
+                ))
+              : mockTopVendors.map((v) => (
+                  <li key={v.id}>
+                    <Link href="/vendors" className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-slate-50">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-xs font-semibold text-primary-dark">
+                        {v.name.slice(0, 1)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-ink">{v.name}</span>
+                        <span className="block text-xs text-muted">Reliability {v.reliability}% · {v.openInvoices} open</span>
+                      </span>
+                      <span className="text-sm font-medium text-ink tnum">{inr(v.balance)}</span>
+                    </Link>
+                  </li>
+                ))}
           </ul>
         </Card>
       </div>
@@ -161,13 +242,13 @@ export default function DashboardPage() {
             <div>
               <p className="text-xs text-muted">Overdue</p>
               <p className="mt-0.5 text-xl font-semibold text-money-out tnum">
-                {live ? "—" : dashboard.exceptions.overdue}
+                {live ? (m?.overdue_count ?? 0) : dashboard.exceptions.overdue}
               </p>
             </div>
             <div>
               <p className="text-xs text-muted">Due soon</p>
               <p className="mt-0.5 text-xl font-semibold text-ink tnum">
-                {live ? "—" : dashboard.exceptions.dueSoon}
+                {live ? (m?.due_soon_count ?? 0) : dashboard.exceptions.dueSoon}
               </p>
             </div>
           </div>
@@ -179,11 +260,6 @@ export default function DashboardPage() {
               View →
             </Link>
           </div>
-          {live && (
-            <p className="border-t border-hairline px-5 py-2 text-xs text-muted">
-              Aging breakdown (overdue / due soon) is not served by /api/metrics yet.
-            </p>
-          )}
         </Card>
 
         <Card>
@@ -192,8 +268,10 @@ export default function DashboardPage() {
             <div>
               <p className="text-xs text-muted">Overdue</p>
               <p className="mt-0.5 text-xl font-semibold text-ink tnum">
-                {live ? "—" : dashboard.pipeline.overdue} ·{" "}
-                <span className="text-base">{live ? "—" : inrCompact(dashboard.pipeline.overdueValue)}</span>
+                {live ? (m?.overdue_count ?? 0) : dashboard.pipeline.overdue} ·{" "}
+                <span className="text-base">
+                  {live ? inrCompact(m?.overdue_total_inr ?? 0) : inrCompact(dashboard.pipeline.overdueValue)}
+                </span>
               </p>
             </div>
             <div>
@@ -215,15 +293,36 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Money movement" action={<MockTag />} />
+          <CardHeader title="Money movement" action={paymentsLive ? <LiveTag /> : <MockTag />} />
           <div className="px-5 pb-2 pt-3">
-            <p className="text-xs text-muted">Money in · Oct 2026</p>
-            <p className="mt-0.5 text-xl font-semibold text-money-in tnum">{inr(dashboard.moneyIn30d)}</p>
-            <p className="mt-3 text-xs text-muted">Money out · Oct 2026</p>
-            <p className="mt-0.5 text-xl font-semibold text-money-out tnum">−{inr(dashboard.moneyOut30d)}</p>
+            <p className="text-xs text-muted">Paid · to date</p>
+            <p className="mt-0.5 text-xl font-semibold text-money-in tnum">
+              {paymentsLive ? inr(paidTotal) : inr(dashboard.moneyIn30d)}
+            </p>
+            <p className="mt-3 text-xs text-muted">Scheduled · outstanding</p>
+            <p className="mt-0.5 text-xl font-semibold text-money-out tnum">
+              −{paymentsLive ? inr(scheduledTotal) : inr(dashboard.moneyOut30d)}
+            </p>
           </div>
           <div className="flex items-center justify-between border-t border-hairline px-5 py-3.5">
-            <span className="text-sm text-muted">Net · <span className="font-medium text-ink tnum">{inr(dashboard.moneyIn30d - dashboard.moneyOut30d)}</span></span>
+            <span className="text-sm text-muted">
+              {paymentsLive ? (
+                <>
+                  {payments.length} payment{payments.length === 1 ? "" : "s"}
+                  {nextPayment ? (
+                    <>
+                      {" "}· next <span className="font-medium text-ink tnum">{formatDate(nextPayment)}</span>
+                    </>
+                  ) : (
+                    ""
+                  )}
+                </>
+              ) : (
+                <>
+                  Net · <span className="font-medium text-ink tnum">{inr(dashboard.moneyIn30d - dashboard.moneyOut30d)}</span>
+                </>
+              )}
+            </span>
             <Link href="/payments" className="text-sm font-medium text-primary hover:text-primary-dark">
               View →
             </Link>

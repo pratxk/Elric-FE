@@ -110,6 +110,40 @@ export interface ApiMetrics {
   exceptions_open: number;
   money_in_exceptions_inr: number;
   auto_approved: number;
+  // Aging breakdown, served by /api/metrics (buckets + due-soon).
+  overdue_count: number;
+  overdue_total_inr: number;
+  due_soon_count: number;
+  due_soon_total_inr: number;
+  aging_buckets: Record<string, { count: number; total_inr: number }>;
+}
+
+export interface ApiVendorSummary {
+  vendor_id: string;
+  vendor_name: string;
+  open_balance_inr: number;
+  open_count: number;
+  last_invoice_date: string | null;
+}
+
+export interface ApiPayment {
+  id: string;
+  invoice_id: string;
+  amount: number;
+  scheduled_date: string;
+  status: string;
+}
+
+export interface ApiForecastWeek {
+  week_start: string;
+  projected_outflow_inr: number;
+}
+
+export interface ApiForecast {
+  weeks: number;
+  start: string;
+  weekly_outflows: ApiForecastWeek[];
+  total_projected_inr: number;
 }
 
 export interface EvalScenario {
@@ -210,12 +244,60 @@ export async function getHealth(): Promise<{ status: string }> {
 
 export async function getMetrics(): Promise<ApiMetrics> {
   const raw = await req<Record<string, unknown>>("/api/metrics");
+  const bucketsRaw = (raw.aging_buckets as Record<string, Record<string, unknown>>) ?? {};
+  const buckets: Record<string, { count: number; total_inr: number }> = {};
+  for (const [k, v] of Object.entries(bucketsRaw)) {
+    buckets[k] = { count: toNum(v.count), total_inr: toNum(v.total_inr) };
+  }
   return {
     total_invoices: toNum(raw.total_invoices),
     by_status: (raw.by_status as Record<string, number>) ?? {},
     exceptions_open: toNum(raw.exceptions_open),
     money_in_exceptions_inr: toNum(raw.money_in_exceptions_inr),
     auto_approved: toNum(raw.auto_approved),
+    overdue_count: toNum(raw.overdue_count),
+    overdue_total_inr: toNum(raw.overdue_total_inr),
+    due_soon_count: toNum(raw.due_soon_count),
+    due_soon_total_inr: toNum(raw.due_soon_total_inr),
+    aging_buckets: buckets,
+  };
+}
+
+export async function getVendorSummaries(): Promise<ApiVendorSummary[]> {
+  const raw = await req<Array<Record<string, unknown>>>("/api/vendors");
+  return raw.map((v) => ({
+    vendor_id: String(v.vendor_id ?? ""),
+    vendor_name: String(v.vendor_name ?? ""),
+    open_balance_inr: toNum(v.open_balance_inr),
+    open_count: toNum(v.open_count),
+    last_invoice_date: (v.last_invoice_date as string | null) ?? null,
+  }));
+}
+
+export async function getPayments(): Promise<ApiPayment[]> {
+  const raw = await req<Array<Record<string, unknown>>>("/api/payments");
+  return raw.map((p) => ({
+    id: String(p.id ?? ""),
+    invoice_id: String(p.invoice_id ?? ""),
+    amount: toNum(p.amount),
+    scheduled_date: String(p.scheduled_date ?? ""),
+    status: String(p.status ?? ""),
+  }));
+}
+
+export async function getForecast(): Promise<ApiForecast> {
+  const raw = await req<Record<string, unknown>>("/api/forecast");
+  const weeks = Array.isArray(raw.weekly_outflows)
+    ? (raw.weekly_outflows as Array<Record<string, unknown>>).map((w) => ({
+        week_start: String(w.week_start ?? ""),
+        projected_outflow_inr: toNum(w.projected_outflow_inr),
+      }))
+    : [];
+  return {
+    weeks: toNum(raw.weeks),
+    start: String(raw.start ?? ""),
+    weekly_outflows: weeks,
+    total_projected_inr: toNum(raw.total_projected_inr),
   };
 }
 
