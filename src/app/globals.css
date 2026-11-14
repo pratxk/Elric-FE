@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-page text-ink font-sans antialiased;
+}
+
+/* Tabular numerals everywhere money appears */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
