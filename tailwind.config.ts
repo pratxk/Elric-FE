@@ -26,7 +26,7 @@ const config: Config = {
       // small labels 12–13px, big figures 30–32px.
       fontSize: {
         display: ["28px", { lineHeight: "34px", fontWeight: "600", letterSpacing: "-0.01em" }],
-        "page-title": ["26px", { lineHeight: "32px", fontWeight: "600", letterSpacing: "-0.01em" }],
+        "page-title": ["28px", { lineHeight: "34px", fontWeight: "600", letterSpacing: "-0.01em" }],
         "section-title": ["15px", { lineHeight: "20px", fontWeight: "600", letterSpacing: "-0.01em" }],
         figure: ["32px", { lineHeight: "36px", fontWeight: "600", letterSpacing: "-0.01em" }],
         body: ["14px", { lineHeight: "20px", fontWeight: "400" }],

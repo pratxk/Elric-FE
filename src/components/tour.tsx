@@ -1,5 +1,6 @@
 "use client";
 
+import { Icon } from "@/components/icons";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
@@ -164,7 +165,7 @@ function TourOverlay({ onDone }: { onDone: () => void }) {
 function AuthSkeleton() {
   return (
     <div className="flex min-h-screen">
-      <div className="w-60 shrink-0 border-r border-hairline bg-white px-3 py-5">
+      <div className="hidden w-60 shrink-0 border-r border-hairline bg-white px-3 py-5 lg:block">
         <div className="skeleton h-9 w-32" />
         <div className="mt-8 space-y-2">
           {[0, 1, 2, 3, 4].map((i) => (
@@ -172,7 +173,7 @@ function AuthSkeleton() {
           ))}
         </div>
       </div>
-      <div className="flex-1 px-8 py-4">
+      <div className="flex-1 px-4 py-4 sm:px-8">
         <div className="skeleton h-10 w-full" />
         <div className="mx-auto mt-6 max-w-6xl space-y-5">
           <div className="skeleton h-8 w-64" />
@@ -196,6 +197,8 @@ export function AuthShell({ children }: { children: ReactNode }) {
   const [showBanner, setShowBanner] = useState(false);
   const [showTour, setShowTour] = useState(false);
   const [bannerBusy, setBannerBusy] = useState(false);
+  // Mobile nav drawer — the sidebar is a slide-over below lg.
+  const [navOpen, setNavOpen] = useState(false);
   const checkedFor = useRef<string>("");
 
   useEffect(() => {
@@ -300,6 +303,12 @@ export function AuthShell({ children }: { children: ReactNode }) {
     }
   };
 
+  // The guided tour highlights nav items — keep the drawer open while
+  // it runs so the targets are visible on mobile too.
+  useEffect(() => {
+    if (showTour) setNavOpen(true);
+  }, [showTour]);
+
   if (status === "checking") return <AuthSkeleton />;
   if (status === "public") return <>{children}</>;
 
@@ -308,19 +317,19 @@ export function AuthShell({ children }: { children: ReactNode }) {
 
   return (
     <div>
-      <Sidebar />
-      <div className="pl-60">
-        <TopBar />
+      <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
+      <div className="pl-0 lg:pl-60">
+        <TopBar onMenu={() => setNavOpen(true)} />
         {showBanner && (
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-8 pt-5">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 pt-5 sm:px-8">
             <div className="flex flex-1 items-center gap-3 rounded-card border border-primary/30 bg-primary-soft px-4 py-3 text-sm">
               <span className="h-2 w-2 shrink-0 rounded-full bg-primary" />
               <p className="flex-1 text-ink">
                 <span className="font-medium">Finish setup</span> — a few details left before Elric is
                 fully configured for your company.
               </p>
-              <a href="/onboarding" className="font-medium text-primary hover:text-primary-dark">
-                Finish setup →
+              <a href="/onboarding" className="inline-flex items-center gap-0.5 font-medium text-primary hover:text-primary-dark">
+                Finish setup <Icon name="chevron-right" size={14} />
               </a>
               <button
                 type="button"
@@ -333,7 +342,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         )}
-        <main className="mx-auto max-w-6xl px-8 pb-16 pt-6">{children}</main>
+        <main className="mx-auto max-w-6xl px-4 pb-16 pt-6 sm:px-8">{children}</main>
       </div>
       {showTour && <TourOverlay onDone={() => setShowTour(false)} />}
     </div>

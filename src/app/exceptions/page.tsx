@@ -131,9 +131,9 @@ export default function ExceptionsPage() {
 
   return (
     <div>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-[26px] font-semibold leading-8 text-ink">Exceptions</h1>
+          <h1 className="text-[28px] font-semibold leading-[34px] text-ink">Exceptions</h1>
           {queue.loading ? (
             <Skeleton className="mt-2 h-4 w-80" />
           ) : queue.error !== null ? (

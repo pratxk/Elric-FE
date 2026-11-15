@@ -25,6 +25,7 @@ import {
   type ApiInvoice,
 } from "@/lib/api";
 import { useMemo } from "react";
+import { Icon, type IconName } from "@/components/icons";
 
 /**
  * Dashboard — live API only. Every card gates on its own fetch:
@@ -34,11 +35,11 @@ import { useMemo } from "react";
  * position card at all.
  */
 
-const actionPills = [
-  { label: "Upload Invoice", href: "/inbox", primary: true },
-  { label: "Approve", href: "/approvals", primary: false },
-  { label: "Pay", href: "/payments", primary: false },
-  { label: "Query Vendor", href: "/exceptions", primary: false },
+const actionPills: { label: string; href: string; primary: boolean; icon: IconName }[] = [
+  { label: "Upload Invoice", href: "/inbox", primary: true, icon: "upload" },
+  { label: "Approve", href: "/approvals", primary: false, icon: "check" },
+  { label: "Pay", href: "/payments", primary: false, icon: "cards" },
+  { label: "Query Vendor", href: "/exceptions", primary: false, icon: "message" },
 ];
 
 function shortId(id: string): string {
@@ -53,7 +54,7 @@ function shortWeekLabel(iso: string): string {
 }
 
 const linkCls =
-  "text-sm font-medium text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none";
+  "inline-flex items-center gap-0.5 text-sm font-medium leading-5 text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none";
 
 export default function DashboardPage() {
   const metrics = useApi(getMetrics);
@@ -74,7 +75,6 @@ export default function DashboardPage() {
         : [],
     [vendorList.data, vendorRegistry.data, invList.data],
   );
-  const vendorsLoaded = vendorList.data !== null && vendorRegistry.data !== null;
 
   const m = metrics.data;
   const realInvoices: ApiInvoice[] = invList.data ?? [];
@@ -131,9 +131,9 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-[26px] font-semibold leading-8 text-ink">Welcome back</h1>
+          <h1 className="text-[28px] font-semibold leading-[34px] text-ink">Welcome back</h1>
           {metrics.loading ? (
             <Skeleton className="mt-2 h-4 w-72" />
           ) : metrics.error !== null ? (
@@ -150,7 +150,7 @@ export default function DashboardPage() {
 
       {anyError && <BackendBanner onRetry={retryAll} />}
 
-      {/* Action pill row — Mercury: filled primary, flat grey secondaries */}
+      {/* Action pill row — Mercury: filled primary, flat grey secondaries, each with a 15px icon */}
       <div className="mt-5 flex flex-wrap items-center gap-2">
         {actionPills.map((p) => (
           <Link
@@ -158,20 +158,24 @@ export default function DashboardPage() {
             href={p.href}
             className={
               p.primary
-                ? "rounded-full bg-primary px-4 py-2 text-sm font-medium text-white transition-colors duration-150 ease-out hover:bg-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
-                : "rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-ink transition-colors duration-150 ease-out hover:bg-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
+                ? "flex h-9 items-center gap-2 rounded-full bg-primary px-3.5 text-sm font-medium leading-5 text-white transition-colors duration-150 ease-out hover:bg-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
+                : "flex h-9 items-center gap-2 rounded-full bg-slate-100 px-3.5 text-sm font-medium leading-5 text-ink transition-colors duration-150 ease-out hover:bg-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
             }
           >
+            <Icon name={p.icon} size={15} />
             {p.label}
           </Link>
         ))}
-        <span className="ml-auto text-sm text-muted">Customize</span>
+        <span className="ml-auto inline-flex items-center gap-1.5 text-sm leading-5 text-muted">
+          <Icon name="sliders" size={14} />
+          Customize
+        </span>
       </div>
 
       {/* Pending approval | Vendor balances */}
       <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-5">
         <Card className="lg:col-span-3">
-          <CardHeader title="Pending approval" action={metrics.data !== null ? <LiveTag /> : undefined} />
+          <CardHeader title="Pending approval" />
           <div className="px-5 pt-2">
             {metrics.loading ? (
               <>
@@ -195,8 +199,9 @@ export default function DashboardPage() {
                   ) : forecast.error !== null ? (
                     <span className="text-muted">Forecast unavailable</span>
                   ) : forecast.data !== null ? (
-                    <span className="inline-flex items-center gap-1 font-medium text-money-out tnum">
-                      ↘ {inrCompact(forecast.data.total_projected_inr)} projected out · next 4 wks
+                    <span className="inline-flex items-center gap-1.5 font-medium text-money-out tnum">
+                      <Icon name="trend-down" size={14} />
+                      {inrCompact(forecast.data.total_projected_inr)} projected out · next 4 wks
                     </span>
                   ) : null}
                 </div>
@@ -220,12 +225,9 @@ export default function DashboardPage() {
           <CardHeader
             title="Vendor balances"
             action={
-              <span className="flex items-center gap-2">
-                {vendorsLoaded && <LiveTag />}
-                <Link href="/vendors" className={linkCls}>
-                  View all
-                </Link>
-              </span>
+              <Link href="/vendors" className={linkCls}>
+                View all
+              </Link>
             }
           />
           {vendorList.loading || vendorRegistry.loading ? (
@@ -284,7 +286,7 @@ export default function DashboardPage() {
       {/* Exceptions | Pipeline | Money movement summary */}
       <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-3">
         <Card>
-          <CardHeader title="Exceptions" action={metrics.data !== null ? <LiveTag /> : undefined} />
+          <CardHeader title="Exceptions" />
           {metrics.loading ? (
             <div className="flex gap-6 px-5 pb-5 pt-3">
               <Skeleton className="h-10 w-16" />
@@ -314,7 +316,7 @@ export default function DashboardPage() {
                   Queue · <span className="font-medium text-ink tnum">{money(pendingTotal, m?.money_in_exceptions_currency ?? "INR")}</span> held
                 </span>
                 <Link href="/exceptions" className={linkCls}>
-                  View →
+                  View <Icon name="chevron-right" size={14} />
                 </Link>
               </div>
             </>
@@ -322,7 +324,7 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Invoice pipeline" action={metrics.data !== null && invList.data !== null ? <LiveTag /> : undefined} />
+          <CardHeader title="Invoice pipeline" />
           {metrics.loading || invList.loading ? (
             <div className="flex gap-6 px-5 pb-5 pt-3">
               <Skeleton className="h-10 w-24" />
@@ -355,7 +357,7 @@ export default function DashboardPage() {
                   <span className="font-medium text-ink tnum">{moneyCompact(openValue, commonCurrency(openInvoices.map((i) => i.currency)))}</span>
                 </span>
                 <Link href="/inbox" className={linkCls}>
-                  View →
+                  View <Icon name="chevron-right" size={14} />
                 </Link>
               </div>
             </>
@@ -363,7 +365,7 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Money movement" action={paymentList.data !== null ? <LiveTag /> : undefined} />
+          <CardHeader title="Money movement" />
           {paymentList.loading ? (
             <div className="space-y-3 px-5 pb-5 pt-3">
               <Skeleton className="h-8 w-40" />
@@ -398,7 +400,7 @@ export default function DashboardPage() {
                   )}
                 </span>
                 <Link href="/payments" className={linkCls}>
-                  View →
+                  View <Icon name="chevron-right" size={14} />
                 </Link>
               </div>
             </>
@@ -411,12 +413,9 @@ export default function DashboardPage() {
         <CardHeader
           title="Recent invoices"
           action={
-            <span className="flex items-center gap-2">
-              {invList.data !== null && <LiveTag />}
-              <Link href="/inbox" className={linkCls}>
-                View all
-              </Link>
-            </span>
+            <Link href="/inbox" className={linkCls}>
+              View all
+            </Link>
           }
         />
         <div className="overflow-x-auto px-2 pb-2 pt-2">
@@ -481,7 +480,7 @@ export default function DashboardPage() {
                       <span className="block text-xs text-muted">{inv.invoice_number || "—"}</span>
                     </td>
                     <td className="px-3 py-3 text-ink">{inv.vendor_name || "Unknown vendor"}</td>
-                    <td className="px-3 py-3 text-muted tnum">{formatDate(inv.invoice_date)}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-muted tnum">{formatDate(inv.invoice_date)}</td>
                     <td className="px-3 py-3 text-right font-medium text-ink tnum">{money(inv.total, inv.currency)}</td>
                     <td className="px-3 py-3">
                       <StatusPill status={inv.status} />

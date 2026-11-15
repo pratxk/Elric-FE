@@ -80,9 +80,9 @@ export default function AccountingPage() {
 
   return (
     <div>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-[26px] font-semibold leading-8 text-ink">Accounting</h1>
+          <h1 className="text-[28px] font-semibold leading-[34px] text-ink">Accounting</h1>
           <p className="mt-1 text-sm text-muted">
             Ledger entries posted by the Bookkeeper agent · every entry traceable to an approved invoice
           </p>

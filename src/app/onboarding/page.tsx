@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { deferOnboarding, markTourPending } from "@/components/tour";
 import {
   DEFAULT_SETTINGS,
@@ -17,7 +18,7 @@ import {
 const inputCls =
   "h-10 w-full rounded-lg border border-hairline bg-white px-3.5 text-sm text-ink placeholder:text-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 const btnPrimary =
-  "rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-60";
+  "inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-60";
 const btnGhost =
   "rounded-full bg-white px-5 py-2.5 text-sm font-medium text-ink shadow-card ring-1 ring-hairline hover:bg-slate-50 disabled:opacity-60";
 
@@ -212,7 +213,7 @@ export default function OnboardingPage() {
               </ul>
               <div className="mt-6 flex items-center gap-3">
                 <button type="button" onClick={() => setStep(2)} className={btnPrimary}>
-                  Set up your company →
+                  Set up your company <Icon name="chevron-right" size={15} />
                 </button>
               </div>
             </div>
@@ -245,7 +246,7 @@ export default function OnboardingPage() {
               </div>
               <div className="mt-6 flex items-center gap-3">
                 <button type="submit" disabled={busy || !settingsLoaded} className={btnPrimary}>
-                  {busy ? "Saving…" : "Continue →"}
+                  {busy ? "Saving…" : <>Continue <Icon name="chevron-right" size={15} /></>}
                 </button>
                 <SkipLink onSkip={skip} />
               </div>
@@ -283,7 +284,7 @@ export default function OnboardingPage() {
               </div>
               <div className="mt-6 flex items-center gap-3">
                 <button type="submit" disabled={busy} className={btnPrimary}>
-                  {busy ? "Saving…" : "Continue →"}
+                  {busy ? "Saving…" : <>Continue <Icon name="chevron-right" size={15} /></>}
                 </button>
                 <SkipLink onSkip={skip} />
               </div>
@@ -321,7 +322,7 @@ export default function OnboardingPage() {
               </div>
               <div className="mt-6 flex items-center gap-3">
                 <button type="submit" disabled={busy} className={btnPrimary}>
-                  {busy ? "Saving…" : "Add vendor & continue →"}
+                  {busy ? "Saving…" : <>Add vendor & continue <Icon name="chevron-right" size={15} /></>}
                 </button>
                 <button
                   type="button"
@@ -361,11 +362,7 @@ export default function OnboardingPage() {
                 } cursor-pointer`}
               >
                 <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-soft text-primary-dark">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <path d="m17 8-5-5-5 5" />
-                    <path d="M12 3v12" />
-                  </svg>
+                  <Icon name="upload" size={20} />
                 </span>
                 <p className="mt-3 text-sm font-medium text-ink">Drop an invoice PDF here, or click to browse</p>
                 <p className="mt-1 text-xs text-muted">PDF, PNG or JPG · up to 20 MB · goes to POST /api/invoices/upload</p>

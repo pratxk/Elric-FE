@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { BackendBanner, Card, CardHeader, EmptyState, LiveTag, Skeleton, StatusPill } from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { formatDate, money } from "@/lib/format";
 import { ApiError, listInvoices, uploadInvoice, useApi, type ApiInvoice } from "@/lib/api";
 
@@ -51,9 +52,9 @@ export default function InboxPage() {
 
   return (
     <div>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-[26px] font-semibold leading-8 text-ink">Inbox</h1>
+          <h1 className="text-[28px] font-semibold leading-[34px] text-ink">Inbox</h1>
           <p className="mt-1 text-sm text-muted">
             Upload invoices, POs and receipts — agents extract, match and queue them. If extraction fails, the
             invoice is parked with the real reason shown on its detail page, where you can retry it.
@@ -87,11 +88,7 @@ export default function InboxPage() {
           } cursor-pointer`}
         >
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-soft text-primary-dark">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <path d="m17 8-5-5-5 5" />
-              <path d="M12 3v12" />
-            </svg>
+            <Icon name="upload" size={20} />
           </span>
           <p className="mt-3 text-sm font-medium text-ink">Drop invoice PDFs here, or click to browse</p>
           <p className="mt-1 text-xs text-muted">
@@ -136,7 +133,7 @@ export default function InboxPage() {
       </Card>
 
       <Card className="mt-5">
-        <CardHeader title="Recently received" action={invList.data !== null ? <LiveTag /> : undefined} />
+        <CardHeader title="Recently received" />
         <div className="overflow-x-auto px-2 pb-2 pt-2">
           <table className="w-full text-sm">
             <thead>

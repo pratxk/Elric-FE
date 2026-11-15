@@ -170,7 +170,7 @@ function MetricCards({ entry, tag }: { entry: EvalSummaryEntry; tag: string }) {
       </div>
       {Object.keys(entry.per_scenario).length > 0 && (
         <Card className="mt-5">
-          <CardHeader title={`Per-scenario breakdown — ${tag}`} action={<LiveTag />} />
+          <CardHeader title={`Per-scenario breakdown — ${tag}`} />
           <div className="overflow-x-auto px-2 pb-2 pt-2">
             <table className="w-full text-sm">
               <thead>
@@ -246,9 +246,9 @@ export default function EvalPage() {
 
   return (
     <div>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-[26px] font-semibold leading-8 text-ink">Eval report</h1>
+          <h1 className="text-[28px] font-semibold leading-[34px] text-ink">Eval report</h1>
           {loading ? (
             <Skeleton className="mt-2 h-4 w-96" />
           ) : error !== null ? (

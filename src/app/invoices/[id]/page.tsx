@@ -13,6 +13,7 @@ import {
   Skeleton,
   StatusPill,
 } from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { formatDate, money, taxLabel } from "@/lib/format";
 import {
   ApiError,
@@ -35,7 +36,7 @@ function traceLabel(action: string): string {
 }
 
 const linkCls =
-  "text-sm font-medium text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none";
+  "inline-flex items-center gap-0.5 text-sm font-medium text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none";
 const primaryBtnCls =
   "rounded-full bg-primary px-4 py-2 text-sm font-medium text-white transition-colors duration-150 ease-out hover:bg-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-40 motion-reduce:transition-none";
 const secondaryBtnCls =
@@ -123,9 +124,10 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
     return (
       <div>
         <Link href="/inbox" className={linkCls}>
-          ← All invoices
+          <Icon name="chevron-left" size={14} />
+          All invoices
         </Link>
-        <h1 className="mt-1 text-[26px] font-semibold leading-8 text-ink">Invoice not loaded</h1>
+        <h1 className="mt-1 text-[28px] font-semibold leading-[34px] text-ink">Invoice not loaded</h1>
         <BackendBanner
           message={`This invoice could not be loaded. ${apiError ?? "Unknown error."}`}
           onRetry={load}
@@ -183,12 +185,13 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
 
   return (
     <div>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <Link href="/inbox" className={linkCls}>
-            ← All invoices
+            <Icon name="chevron-left" size={14} />
+            All invoices
           </Link>
-          <h1 className="mt-1 text-[26px] font-semibold leading-8 text-ink">
+          <h1 className="mt-1 text-[28px] font-semibold leading-[34px] text-ink">
             {shortId(inv.id)} <span className="font-normal text-muted">· {inv.invoice_number || "no invoice no."}</span>
           </h1>
           <p className="mt-1 text-sm text-muted">
@@ -239,7 +242,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
           <div className="px-5 pb-5 pt-4">
             {inv.lines.length > 0 ? (
               <div className="rounded-lg border border-hairline bg-white p-5 text-sm">
-                <div className="flex items-start justify-between border-b border-hairline pb-4">
+                <div className="flex flex-wrap items-start justify-between gap-2 border-b border-hairline pb-4">
                   <div>
                     <p className="text-base font-bold text-ink">{inv.vendor_name || "Unknown vendor"}</p>
                     <p className="mt-1 text-xs leading-5 text-muted">Tax Invoice · FY 2026–27</p>
@@ -250,6 +253,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                     <p className="mt-1 text-xs text-muted">Date {formatDate(inv.invoice_date)}</p>
                   </div>
                 </div>
+                <div className="overflow-x-auto">
                 <table className="mt-4 w-full text-sm">
                   <thead>
                     <tr className="text-left text-xs text-muted">
@@ -266,13 +270,14 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                           {l.description}
                           {l.hsn_code && <span className="block text-xs text-muted">HSN {l.hsn_code}</span>}
                         </td>
-                        <td className="py-2 text-right tnum">{l.qty}</td>
-                        <td className="py-2 text-right tnum">{money(l.unit_price, inv.currency)}</td>
-                        <td className="py-2 text-right font-medium tnum">{money(l.qty * l.unit_price, inv.currency)}</td>
+                        <td className="whitespace-nowrap py-2 text-right tnum">{l.qty}</td>
+                        <td className="whitespace-nowrap py-2 pl-2 text-right tnum">{money(l.unit_price, inv.currency)}</td>
+                        <td className="whitespace-nowrap py-2 pl-2 text-right font-medium tnum">{money(l.qty * l.unit_price, inv.currency)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                </div>
                 <div className="mt-4 space-y-1 border-t border-hairline pt-3 text-right">
                   <p className="text-sm text-muted">
                     Subtotal <span className="ml-6 inline-block w-28 text-ink tnum">{money(subtotal, inv.currency)}</span>
@@ -302,8 +307,8 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
         {/* Extracted fields + exceptions */}
         <div className="space-y-5">
           <Card>
-            <CardHeader title="Extracted fields" action={<LiveTag />} />
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 px-5 py-4 text-sm">
+            <CardHeader title="Extracted fields" />
+            <dl className="grid grid-cols-1 gap-x-4 gap-y-3 px-5 py-4 text-sm sm:grid-cols-2">
               {[
                 ["Vendor", inv.vendor_name || "Not extracted"],
                 ["Invoice no.", inv.invoice_number || "—"],
@@ -326,7 +331,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
 
           {inv.exceptions.length > 0 && (
             <Card>
-              <CardHeader title="Exceptions" action={<LiveTag />} />
+              <CardHeader title="Exceptions" />
               <ul className="space-y-3 px-5 pb-5 pt-3">
                 {inv.exceptions.map((e) => (
                   <li key={e.code} className="text-sm">
@@ -341,7 +346,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
 
           {rootCauses.length > 0 && (
             <Card>
-              <CardHeader title="Exception root cause" action={<LiveTag />} />
+              <CardHeader title="Exception root cause" />
               {rootCauses.map((rc, i) => (
                 <p key={i} className="px-5 pb-5 pt-3 text-sm leading-6 text-ink">
                   {rc}
@@ -362,9 +367,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                 Outcome: <span className="font-medium text-ink">{inv.match.outcome}</span>
                 {inv.match.exception_codes.length > 0 && ` · ${inv.match.exception_codes.join(", ")}`}
               </span>
-            ) : (
-              <LiveTag />
-            )
+            ) : null
           }
         />
         {inv.match ? (
@@ -455,11 +458,8 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
         <CardHeader
           title="Agent trace"
           action={
-            <span className="flex items-center gap-2">
-              <LiveTag />
-              <span className="text-xs text-muted">
-                {traceDone ? "Stream complete" : traceError ? "Stream unavailable" : "Streaming…"}
-              </span>
+            <span className="text-xs text-muted">
+              {traceDone ? "Stream complete" : traceError ? "Stream unavailable" : "Streaming…"}
             </span>
           }
         />

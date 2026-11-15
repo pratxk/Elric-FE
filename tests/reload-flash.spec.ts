@@ -191,10 +191,10 @@ test.describe.serial("reload flash, mock removal, fidelity, eval", () => {
     expect(font.smoothing).toBe("antialiased");
     expect(font.loadedInterWeights).toContain("400");
     expect(font.loadedInterWeights).toContain("600");
-    expect(font.h1Size).toBe("26px");
+    expect(font.h1Size).toBe("28px");
     expect(["600", "700"]).toContain(font.h1Weight);
-    // Global token: headings track at -0.01em → -0.26px at 26px.
-    expect(Math.abs(parseFloat(font.h1LetterSpacing ?? "0") - -0.26)).toBeLessThan(0.1);
+    // Global token: headings track at -0.01em → -0.28px at 28px.
+    expect(Math.abs(parseFloat(font.h1LetterSpacing ?? "0") - -0.28)).toBeLessThan(0.1);
   });
 
   test("empty DB: every page shows an honest empty state, zero non-zero numbers", async ({ page }) => {

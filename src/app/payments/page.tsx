@@ -53,9 +53,9 @@ export default function PaymentsPage() {
 
   return (
     <div>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-[26px] font-semibold leading-8 text-ink">Payments</h1>
+          <h1 className="text-[28px] font-semibold leading-[34px] text-ink">Payments</h1>
           {payments.loading ? (
             <Skeleton className="mt-2 h-4 w-80" />
           ) : loaded ? (

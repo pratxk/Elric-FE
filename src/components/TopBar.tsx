@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { logoutUser } from "@/lib/api";
+import { Icon } from "@/components/icons";
 
-export default function TopBar() {
+export default function TopBar({ onMenu }: { onMenu?: () => void }) {
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -23,35 +24,42 @@ export default function TopBar() {
   };
 
   return (
-    <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-hairline bg-page/90 px-8 py-4 backdrop-blur">
-      <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-hairline bg-white px-3.5 text-sm text-muted shadow-card">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
-        <span className="flex-1">Search for anything</span>
-        <kbd className="rounded border border-hairline bg-page px-1.5 py-0.5 font-sans text-[11px] text-muted">⌘ K</kbd>
+    <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-hairline bg-page/90 px-4 py-3 backdrop-blur sm:gap-3 sm:px-8 sm:py-4">
+      <button
+        type="button"
+        aria-label="Open navigation"
+        onClick={onMenu}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ink hover:bg-slate-100 lg:hidden"
+      >
+        <Icon name="menu" size={18} />
+      </button>
+
+      <div className="flex h-10 min-w-0 flex-1 items-center gap-2.5 rounded-lg border border-hairline bg-white px-3.5 text-sm text-muted">
+        <Icon name="search" size={18} />
+        <span className="min-w-0 flex-1 truncate leading-5">Search for anything</span>
+        <kbd className="hidden rounded border border-hairline bg-page px-1.5 py-0.5 font-sans text-[11px] leading-4 text-muted sm:block">
+          ⌘ K
+        </kbd>
       </div>
 
       <Link
         href="/inbox"
-        className="flex h-10 items-center rounded-full bg-primary px-4 text-sm font-medium text-white hover:bg-primary-dark"
+        className="flex h-9 shrink-0 items-center gap-2 rounded-full bg-primary px-3.5 text-sm font-medium leading-5 text-white hover:bg-primary-dark sm:px-4"
       >
-        Upload Invoice
+        <Icon name="upload" size={15} />
+        <span className="hidden sm:inline">Upload Invoice</span>
+        <span className="sm:hidden">Upload</span>
       </Link>
 
       <button
         type="button"
         aria-label="Notifications"
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-hairline bg-white text-muted shadow-card hover:text-ink"
+        className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full border border-hairline bg-white text-muted hover:text-ink sm:flex"
       >
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-          <path d="M13.7 21a2 2 0 0 1-3.4 0" />
-        </svg>
+        <Icon name="bell" size={18} />
       </button>
 
-      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-soft text-sm font-semibold text-primary-dark">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-soft text-sm font-semibold leading-5 text-primary-dark">
         PS
       </span>
 
@@ -59,9 +67,18 @@ export default function TopBar() {
         type="button"
         onClick={() => void onLogout()}
         disabled={loggingOut}
-        className="flex h-10 items-center rounded-full border border-hairline bg-white px-4 text-sm font-medium text-ink shadow-card hover:bg-slate-50 disabled:opacity-60"
+        className="hidden h-9 shrink-0 items-center rounded-full px-3 text-sm font-medium leading-5 text-muted hover:bg-slate-100 hover:text-ink disabled:opacity-60 md:flex"
       >
         {loggingOut ? "Logging out…" : "Log out"}
+      </button>
+      <button
+        type="button"
+        aria-label="Log out"
+        onClick={() => void onLogout()}
+        disabled={loggingOut}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted hover:bg-slate-100 hover:text-ink disabled:opacity-60 md:hidden"
+      >
+        <Icon name="log-out" size={18} />
       </button>
     </header>
   );

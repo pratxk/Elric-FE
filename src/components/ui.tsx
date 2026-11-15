@@ -102,8 +102,8 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
 
 export function CardHeader({ title, action }: { title: string; action?: ReactNode }) {
   return (
-    <div className="flex items-center justify-between px-5 pt-5">
-      <h2 className="text-[15px] font-semibold text-ink">{title}</h2>
+    <div className="flex items-center justify-between gap-3 px-5 pt-5">
+      <h2 className="text-sm font-medium leading-5 text-ink">{title}</h2>
       {action}
     </div>
   );
