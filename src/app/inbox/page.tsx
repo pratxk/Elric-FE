@@ -2,9 +2,8 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
-import { BackendBanner, Card, CardHeader, LiveTag, MockTag, StatusPill } from "@/components/ui";
-import { invoices as mockInvoices, type InvoiceStatus } from "@/lib/mock-data";
-import { formatDate, inr } from "@/lib/format";
+import { BackendBanner, Card, CardHeader, EmptyState, LiveTag, Skeleton, StatusPill } from "@/components/ui";
+import { formatDate, money } from "@/lib/format";
 import { ApiError, listInvoices, uploadInvoice, useApi, type ApiInvoice } from "@/lib/api";
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // backend limit (routes.py)
@@ -21,7 +20,7 @@ export default function InboxPage() {
   const [uploaded, setUploaded] = useState<ApiInvoice[]>([]);
 
   const invList = useApi(listInvoices);
-  const live = invList.data !== null;
+  const invoices = invList.data ?? [];
 
   const onFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -56,14 +55,16 @@ export default function InboxPage() {
         <div>
           <h1 className="text-[26px] font-semibold leading-8 text-ink">Inbox</h1>
           <p className="mt-1 text-sm text-muted">
-            Upload invoices, POs and receipts — agents extract, match and queue them. Without a Gemini key
-            configured the backend parks uploads as flagged (extraction unavailable) — nothing is faked.
+            Upload invoices, POs and receipts — agents extract, match and queue them. If extraction fails, the
+            invoice is parked with the real reason shown on its detail page, where you can retry it.
           </p>
         </div>
-        {live ? <LiveTag /> : <MockTag />}
+        {invList.data !== null && <LiveTag />}
       </div>
 
-      {invList.error !== null && <BackendBanner onRetry={invList.refresh} />}
+      {invList.error !== null && (
+        <BackendBanner message={`Invoices could not be loaded. ${invList.error}`} onRetry={invList.refresh} />
+      )}
 
       <Card className="mt-5">
         <div
@@ -81,7 +82,7 @@ export default function InboxPage() {
             setDragOver(false);
             void onFiles(e.dataTransfer.files);
           }}
-          className={`m-5 flex flex-col items-center justify-center rounded-card border border-dashed px-6 py-12 text-center ${
+          className={`m-5 flex flex-col items-center justify-center rounded-card border border-dashed px-6 py-12 text-center transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none ${
             dragOver ? "border-primary bg-primary-soft" : "border-hairline bg-page"
           } cursor-pointer`}
         >
@@ -118,12 +119,15 @@ export default function InboxPage() {
             {uploaded.map((inv) => (
               <li key={inv.id} className="flex items-center gap-2 rounded-lg border border-hairline bg-white px-3 py-2 text-sm">
                 <span className="h-2 w-2 shrink-0 rounded-full bg-amber" />
-                <Link href={`/invoices/${inv.id}`} className="flex-1 font-medium text-primary hover:text-primary-dark">
+                <Link
+                  href={`/invoices/${inv.id}`}
+                  className="flex-1 font-medium text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none"
+                >
                   {inv.invoice_number || shortId(inv.id)}
                 </Link>
-                <StatusPill status={inv.status as InvoiceStatus} />
+                <StatusPill status={inv.status} />
                 <span className="text-xs text-muted">
-                  Extraction parked — no Gemini key on the backend; flagged for human review
+                  Uploaded — the pipeline runs in the background; open the invoice to follow it
                 </span>
               </li>
             ))}
@@ -132,7 +136,7 @@ export default function InboxPage() {
       </Card>
 
       <Card className="mt-5">
-        <CardHeader title="Recently received" action={live ? <LiveTag /> : <MockTag />} />
+        <CardHeader title="Recently received" action={invList.data !== null ? <LiveTag /> : undefined} />
         <div className="overflow-x-auto px-2 pb-2 pt-2">
           <table className="w-full text-sm">
             <thead>
@@ -146,47 +150,68 @@ export default function InboxPage() {
               </tr>
             </thead>
             <tbody>
-              {live
-                ? (invList.data ?? []).map((inv) => (
-                    <tr key={inv.id} className="border-t border-hairline">
-                      <td className="px-3 py-3">
-                        <Link href={`/invoices/${inv.id}`} className="font-medium text-primary hover:text-primary-dark">
-                          {shortId(inv.id)}
-                        </Link>
-                        <span className="block text-xs text-muted">{inv.invoice_number || "—"}</span>
-                      </td>
-                      <td className="px-3 py-3 text-ink">{inv.vendor_name || "Unknown vendor"}</td>
-                      <td className="px-3 py-3 text-muted tnum">{formatDate(inv.invoice_date)}</td>
-                      <td className="px-3 py-3 text-muted tnum">{formatDate(inv.due_date ?? "")}</td>
-                      <td className="px-3 py-3 text-right font-medium text-ink tnum">{inr(inv.total)}</td>
-                      <td className="px-3 py-3">
-                        <StatusPill status={inv.status as InvoiceStatus} />
-                      </td>
-                    </tr>
-                  ))
-                : mockInvoices.map((inv) => (
-                    <tr key={inv.id} className="border-t border-hairline">
-                      <td className="px-3 py-3">
-                        <Link href={`/invoices/${inv.id}`} className="font-medium text-primary hover:text-primary-dark">
-                          {inv.id}
-                        </Link>
-                        <span className="block text-xs text-muted">{inv.number}</span>
-                      </td>
-                      <td className="px-3 py-3 text-ink">{inv.vendor}</td>
-                      <td className="px-3 py-3 text-muted tnum">{formatDate(inv.invoiceDate)}</td>
-                      <td className="px-3 py-3 text-muted tnum">{formatDate(inv.dueDate)}</td>
-                      <td className="px-3 py-3 text-right font-medium text-ink tnum">{inr(inv.amount)}</td>
-                      <td className="px-3 py-3">
-                        <StatusPill status={inv.status} />
-                      </td>
-                    </tr>
-                  ))}
-              {live && (invList.data ?? []).length === 0 && (
+              {invList.loading ? (
+                [0, 1, 2, 3].map((i) => (
+                  <tr key={i} className="border-t border-hairline" aria-hidden="true">
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-4 w-24" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-4 w-32" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="ml-auto h-4 w-20" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </td>
+                  </tr>
+                ))
+              ) : invList.error !== null ? (
                 <tr className="border-t border-hairline">
-                  <td colSpan={6} className="px-3 py-8 text-center text-sm text-muted">
-                    No invoices in the backend yet — upload one above.
+                  <td colSpan={6} className="px-3 py-8 text-center text-sm text-amber-700">
+                    Invoices could not be loaded. {invList.error}
                   </td>
                 </tr>
+              ) : invoices.length === 0 ? (
+                <tr className="border-t border-hairline">
+                  <td colSpan={6} className="px-3 py-4">
+                    <EmptyState
+                      title="No invoices yet"
+                      body="Upload your first invoice above — the agents will extract, match and queue it."
+                    />
+                  </td>
+                </tr>
+              ) : (
+                invoices.map((inv) => (
+                  <tr
+                    key={inv.id}
+                    className="border-t border-hairline transition-colors duration-150 ease-out hover:bg-slate-50 motion-reduce:transition-none"
+                  >
+                    <td className="px-3 py-3">
+                      <Link
+                        href={`/invoices/${inv.id}`}
+                        className="font-medium text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none"
+                      >
+                        {shortId(inv.id)}
+                      </Link>
+                      <span className="block text-xs text-muted">{inv.invoice_number || "—"}</span>
+                    </td>
+                    <td className="px-3 py-3 text-ink">{inv.vendor_name || "Unknown vendor"}</td>
+                    <td className="px-3 py-3 text-muted tnum">{formatDate(inv.invoice_date)}</td>
+                    <td className="px-3 py-3 text-muted tnum">{formatDate(inv.due_date ?? "")}</td>
+                    <td className="px-3 py-3 text-right font-medium text-ink tnum">{money(inv.total, inv.currency)}</td>
+                    <td className="px-3 py-3">
+                      <StatusPill status={inv.status} />
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>

@@ -7,11 +7,15 @@
  * http://localhost:8000 — see next.config.mjs). The backend ships no CORS
  * middleware, so the same-origin proxy is the default local path.
  *
- * The frontend never calls Gemini itself. The backend only calls Gemini
- * during extraction; with no key configured it parks uploads as flagged
- * instead — that is the honest behaviour this client surfaces.
+ * The frontend never calls Gemini itself. Extraction failures are
+ * surfaced by the backend on each invoice as extraction_error /
+ * extraction_error_kind — the UI renders that true reason and offers a
+ * retry (POST /api/invoices/{id}/retry-extraction). It never guesses
+ * "no key configured": that copy appears only when the backend reports
+ * kind "no_key".
  */
 import { useCallback, useEffect, useState } from "react";
+import { normalizeCurrency } from "./format";
 
 export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -30,15 +34,98 @@ function toNum(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+/* ------------------------------------------------------- auth (tokens) */
+
+/**
+ * Token auth (v1.1 contract): the backend returns a short-lived JWT
+ * `access_token` in JSON on register/login/refresh, and sets an HttpOnly
+ * `elric_refresh` cookie (7 days). The access token lives IN MEMORY ONLY
+ * — never localStorage/sessionStorage — and is sent as
+ * `Authorization: Bearer <token>` on every API call. The refresh cookie
+ * flows automatically with `credentials: "include"` (same-origin via the
+ * Next.js proxy); the frontend never reads it.
+ */
+
+let accessToken: string | null = null;
+
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
+export function setAccessToken(token: string | null): void {
+  accessToken = token;
+}
+
+export function clearAccessToken(): void {
+  accessToken = null;
+}
+
+function redirectToLogin(): void {
+  if (typeof window === "undefined") return;
+  const path = window.location.pathname;
+  if (path !== "/login" && path !== "/register") window.location.href = "/login";
+}
+
+/** Raw refresh call — never goes through req() (no retry loop on itself). */
+let refreshInFlight: Promise<string | null> | null = null;
+
+export async function refreshAccessToken(): Promise<string | null> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) {
+        clearAccessToken();
+        return null;
+      }
+      const body = (await res.json()) as { access_token?: string };
+      if (typeof body.access_token !== "string" || body.access_token === "") {
+        clearAccessToken();
+        return null;
+      }
+      setAccessToken(body.access_token);
+      return body.access_token;
+    } catch {
+      clearAccessToken();
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
+/**
+ * App-load / route-guard entry point: if there is no access token in
+ * memory, silently refresh via the cookie first. Returns true when a
+ * usable token exists afterwards.
+ */
+export async function ensureSession(): Promise<boolean> {
+  if (accessToken) return true;
+  return (await refreshAccessToken()) !== null;
+}
+
+/** Fetch with auth. On 401, refresh once and retry; if refresh fails, log out. */
+async function reqAuth<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> | undefined),
+    Accept: "application/json",
+  };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: { ...(init?.headers ?? {}), Accept: "application/json" },
-    });
+    res = await fetch(`${API_BASE}${path}`, { ...init, credentials: "include", headers });
   } catch {
     throw new ApiError(0, "Backend unreachable — is it running on port 8000?");
+  }
+  if (res.status === 401 && !retried && path.startsWith("/api/") && !path.startsWith("/api/auth/login") && !path.startsWith("/api/auth/register") && !path.startsWith("/api/auth/refresh")) {
+    const fresh = await refreshAccessToken();
+    if (fresh) return reqAuth<T>(path, init, true);
+    redirectToLogin();
   }
   if (!res.ok) {
     let detail = `Request failed (${res.status})`;
@@ -51,6 +138,69 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(res.status, detail);
   }
   return (await res.json()) as T;
+}
+
+/* ------------------------------------------------------- auth endpoints */
+
+export interface ApiUser {
+  id: string;
+  email: string;
+  onboarding_completed: boolean;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  user: ApiUser;
+}
+
+function storeAuth(r: AuthResponse): AuthResponse {
+  if (typeof r.access_token === "string" && r.access_token !== "") setAccessToken(r.access_token);
+  return r;
+}
+
+export async function registerUser(email: string, password: string): Promise<AuthResponse> {
+  const r = await reqAuth<AuthResponse>("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  return storeAuth(r);
+}
+
+export async function loginUser(email: string, password: string): Promise<AuthResponse> {
+  const r = await reqAuth<AuthResponse>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  return storeAuth(r);
+}
+
+export async function logoutUser(): Promise<void> {
+  try {
+    await reqAuth<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+  } finally {
+    clearAccessToken();
+  }
+}
+
+export async function getMe(): Promise<ApiUser> {
+  return reqAuth<ApiUser>("/api/auth/me");
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  await reqAuth<{ ok: boolean }>("/api/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+  // Success revokes ALL sessions server-side: drop the in-memory token
+  // and force a fresh login (the settings page redirects to /login).
+  clearAccessToken();
+}
+
+export async function completeOnboarding(): Promise<{ onboarding_completed: boolean }> {
+  return reqAuth<{ onboarding_completed: boolean }>("/api/auth/complete-onboarding", { method: "POST" });
 }
 
 /* ------------------------------------------------------------------ types */
@@ -102,6 +252,30 @@ export interface ApiInvoice {
   lines: ApiInvoiceLine[];
   match: ApiMatch | null;
   exceptions: ApiException[];
+  /** Last extraction failure, as reported by the backend (None when
+   * extraction succeeded or has not run). */
+  extraction_error: string | null;
+  /** "no_key" | "overloaded" | "quota" | "failed" | null. */
+  extraction_error_kind: string | null;
+}
+
+/** Human sentence for an invoice's extraction failure, or null when
+ * there is none. Keyed on the backend-reported kind — "no key" appears
+ * only when the backend genuinely has no key configured. */
+export function extractionFailureReason(inv: Pick<ApiInvoice, "extraction_error" | "extraction_error_kind">): string | null {
+  if (!inv.extraction_error && !inv.extraction_error_kind) return null;
+  switch (inv.extraction_error_kind) {
+    case "no_key":
+      return "No Gemini API key is configured on this backend — set GEMINI_API_KEY and retry the invoice.";
+    case "overloaded":
+      return "Gemini was overloaded (HTTP 503) when this invoice was processed — extraction did not run. You can retry it below.";
+    case "quota":
+      return "Gemini quota was exhausted when this invoice was processed — extraction did not run. Try again later.";
+    default:
+      return inv.extraction_error
+        ? `Extraction failed — ${inv.extraction_error}`
+        : "Extraction failed for an unknown reason — see the invoice trace.";
+  }
 }
 
 export interface ApiMetrics {
@@ -109,12 +283,15 @@ export interface ApiMetrics {
   by_status: Record<string, number>;
   exceptions_open: number;
   money_in_exceptions_inr: number;
+  money_in_exceptions_currency: string;
   auto_approved: number;
   // Aging breakdown, served by /api/metrics (buckets + due-soon).
   overdue_count: number;
   overdue_total_inr: number;
+  overdue_total_currency: string;
   due_soon_count: number;
   due_soon_total_inr: number;
+  due_soon_total_currency: string;
   aging_buckets: Record<string, { count: number; total_inr: number }>;
 }
 
@@ -223,7 +400,7 @@ function normalizeInvoice(raw: Record<string, unknown>): ApiInvoice {
     invoice_number: String(raw.invoice_number ?? ""),
     invoice_date: String(raw.invoice_date ?? ""),
     due_date: (raw.due_date as string | null) ?? null,
-    currency: String(raw.currency ?? "INR"),
+    currency: normalizeCurrency(String(raw.currency ?? "INR")),
     status: String(raw.status ?? ""),
     subtotal: toNum(raw.subtotal),
     tax_total: toNum(raw.tax_total),
@@ -232,18 +409,231 @@ function normalizeInvoice(raw: Record<string, unknown>): ApiInvoice {
     lines,
     match,
     exceptions,
+    extraction_error: (raw.extraction_error as string | null) ?? null,
+    extraction_error_kind: (raw.extraction_error_kind as string | null) ?? null,
   };
+}
+
+export interface ApiSettings {
+  company_name: string;
+  country: string;
+  state: string;
+  currency: string;
+  auto_approve_limit_inr: number;
+  tolerance_pct: number;
+  tolerance_flat_inr: number;
+  duplicate_window_days: number;
+}
+
+export const DEFAULT_SETTINGS: ApiSettings = {
+  company_name: "",
+  country: "India",
+  state: "Karnataka",
+  currency: "INR",
+  auto_approve_limit_inr: 50000,
+  tolerance_pct: 2,
+  tolerance_flat_inr: 500,
+  duplicate_window_days: 90,
+};
+
+/** Password policy (mirrors the server): 12+ chars, upper, lower, digit, symbol. */
+export const PASSWORD_RULES: Array<{ key: string; label: string; test: (pw: string) => boolean }> = [
+  { key: "length", label: "At least 12 characters", test: (pw) => pw.length >= 12 },
+  { key: "upper", label: "At least one uppercase letter (A–Z)", test: (pw) => /[A-Z]/.test(pw) },
+  { key: "lower", label: "At least one lowercase letter (a–z)", test: (pw) => /[a-z]/.test(pw) },
+  { key: "digit", label: "At least one digit (0–9)", test: (pw) => /[0-9]/.test(pw) },
+  { key: "symbol", label: "At least one symbol (!@#$…)", test: (pw) => /[^A-Za-z0-9]/.test(pw) },
+];
+
+export function passwordIsValid(pw: string): boolean {
+  return PASSWORD_RULES.every((r) => r.test(pw));
+}
+
+export interface ApiVendor {
+  id: string;
+  name: string;
+  gstin: string;
+  state: string;
+  payment_terms: string;
+  email: string;
+}
+
+/** Merge the vendor registry with invoice-derived balances into one
+ * row per vendor. A registered vendor shows even with no invoices yet
+ * (zero balance); a vendor that only exists on invoices still shows
+ * with its balance. Used by the Vendors page and the dashboard's
+ * vendor-balances card so neither ever says "No vendors yet" to a
+ * user who already registered one.
+ *
+ * Currency: the backend sums a vendor's open invoice totals without
+ * conversion, so a row's balance is only meaningful in the currency
+ * of those invoices. `invoices` (the user's invoice list) supplies
+ * it: when every open invoice for the vendor shares one currency the
+ * row uses it, otherwise the workspace currency (INR). */
+export interface VendorRow {
+  id: string;
+  name: string;
+  openCount: number;
+  openBalanceInr: number;
+  lastInvoiceDate: string | null;
+  registered: boolean;
+  currency: string;
+}
+
+/** Open statuses, mirroring the backend's vendor-summary aggregation. */
+const OPEN_STATUSES = new Set([
+  "received",
+  "extracted",
+  "validated",
+  "matched",
+  "flagged",
+  "approved",
+  "posted",
+  "scheduled",
+  "on_hold",
+]);
+
+function vendorCurrency(row: { id: string; name: string }, invoices: ApiInvoice[]): string {
+  const currencies = invoices
+    .filter(
+      (i) =>
+        OPEN_STATUSES.has(i.status) && (i.vendor_id === row.id || (row.name !== "" && i.vendor_name === row.name)),
+    )
+    .map((i) => i.currency);
+  const distinct = [...new Set(currencies.map((c) => normalizeCurrency(c)).filter((c) => c !== ""))];
+  return distinct.length === 1 ? distinct[0] : "INR";
+}
+
+export function mergeVendorRows(
+  registry: ApiVendor[],
+  summaries: ApiVendorSummary[],
+  invoices: ApiInvoice[] = [],
+): VendorRow[] {
+  const byId = new Map<string, ApiVendorSummary>();
+  for (const s of summaries) byId.set(s.vendor_id, s);
+  const rows: VendorRow[] = registry.map((v) => {
+    const s = byId.get(v.id);
+    return {
+      id: v.id,
+      name: v.name,
+      openCount: s?.open_count ?? 0,
+      openBalanceInr: s?.open_balance_inr ?? 0,
+      lastInvoiceDate: s?.last_invoice_date ?? null,
+      registered: true,
+      currency: vendorCurrency(v, invoices),
+    };
+  });
+  for (const s of summaries) {
+    if (!registry.some((v) => v.id === s.vendor_id)) {
+      rows.push({
+        id: s.vendor_id,
+        name: s.vendor_name,
+        openCount: s.open_count,
+        openBalanceInr: s.open_balance_inr,
+        lastInvoiceDate: s.last_invoice_date,
+        registered: false,
+        currency: vendorCurrency({ id: s.vendor_id, name: s.vendor_name }, invoices),
+      });
+    }
+  }
+  return rows.sort((a, b) => b.openBalanceInr - a.openBalanceInr);
 }
 
 /* -------------------------------------------------------------- endpoints */
 
 export async function getHealth(): Promise<{ status: string }> {
   // /health is proxied to the backend by next.config.mjs, like /api/*.
-  return req<{ status: string }>("/health");
+  return reqAuth<{ status: string }>("/health");
+}
+
+/* ------------------------------------------------------------- settings */
+
+export async function getSettings(): Promise<ApiSettings> {
+  const raw = await reqAuth<Record<string, unknown>>("/api/settings");
+  return {
+    company_name: String(raw.company_name ?? ""),
+    country: String(raw.country ?? "India"),
+    state: String(raw.state ?? ""),
+    currency: normalizeCurrency(String(raw.currency ?? "INR")),
+    auto_approve_limit_inr: toNum(raw.auto_approve_limit_inr),
+    tolerance_pct: toNum(raw.tolerance_pct),
+    tolerance_flat_inr: toNum(raw.tolerance_flat_inr),
+    duplicate_window_days: toNum(raw.duplicate_window_days),
+  };
+}
+
+export async function updateSettings(s: ApiSettings): Promise<ApiSettings> {
+  const raw = await reqAuth<Record<string, unknown>>("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(s),
+  });
+  return {
+    company_name: String(raw.company_name ?? s.company_name),
+    country: String(raw.country ?? s.country),
+    state: String(raw.state ?? s.state),
+    currency: normalizeCurrency(String(raw.currency ?? s.currency)),
+    auto_approve_limit_inr: toNum(raw.auto_approve_limit_inr ?? s.auto_approve_limit_inr),
+    tolerance_pct: toNum(raw.tolerance_pct ?? s.tolerance_pct),
+    tolerance_flat_inr: toNum(raw.tolerance_flat_inr ?? s.tolerance_flat_inr),
+    duplicate_window_days: toNum(raw.duplicate_window_days ?? s.duplicate_window_days),
+  };
+}
+
+/* -------------------------------------------------------------- vendors */
+
+export async function listVendors(): Promise<ApiVendor[]> {
+  // The registry list — NOT GET /api/vendors (that returns per-vendor
+  // open-balance summaries derived from invoices).
+  const raw = await reqAuth<Array<Record<string, unknown>>>("/api/vendors/registry");
+  return raw.map((v) => ({
+    id: String(v.id ?? v.vendor_id ?? ""),
+    name: String(v.name ?? v.vendor_name ?? ""),
+    gstin: String(v.gstin ?? ""),
+    state: String(v.state ?? ""),
+    payment_terms: String(v.payment_terms ?? ""),
+    email: String(v.email ?? ""),
+  }));
+}
+
+export async function createVendor(v: Omit<ApiVendor, "id">): Promise<ApiVendor> {
+  const raw = await reqAuth<Record<string, unknown>>("/api/vendors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(v),
+  });
+  return {
+    id: String(raw.id ?? ""),
+    name: String(raw.name ?? v.name),
+    gstin: String(raw.gstin ?? v.gstin),
+    state: String(raw.state ?? v.state),
+    payment_terms: String(raw.payment_terms ?? v.payment_terms),
+    email: String(raw.email ?? v.email),
+  };
+}
+
+export async function updateVendor(id: string, v: Omit<ApiVendor, "id">): Promise<ApiVendor> {
+  const raw = await reqAuth<Record<string, unknown>>(`/api/vendors/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(v),
+  });
+  return {
+    id: String(raw.id ?? id),
+    name: String(raw.name ?? v.name),
+    gstin: String(raw.gstin ?? v.gstin),
+    state: String(raw.state ?? v.state),
+    payment_terms: String(raw.payment_terms ?? v.payment_terms),
+    email: String(raw.email ?? v.email),
+  };
+}
+
+export async function deleteVendor(id: string): Promise<void> {
+  await reqAuth<unknown>(`/api/vendors/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function getMetrics(): Promise<ApiMetrics> {
-  const raw = await req<Record<string, unknown>>("/api/metrics");
+  const raw = await reqAuth<Record<string, unknown>>("/api/metrics");
   const bucketsRaw = (raw.aging_buckets as Record<string, Record<string, unknown>>) ?? {};
   const buckets: Record<string, { count: number; total_inr: number }> = {};
   for (const [k, v] of Object.entries(bucketsRaw)) {
@@ -254,20 +644,26 @@ export async function getMetrics(): Promise<ApiMetrics> {
     by_status: (raw.by_status as Record<string, number>) ?? {},
     exceptions_open: toNum(raw.exceptions_open),
     money_in_exceptions_inr: toNum(raw.money_in_exceptions_inr),
+    money_in_exceptions_currency: String(raw.money_in_exceptions_currency ?? "INR"),
     auto_approved: toNum(raw.auto_approved),
     overdue_count: toNum(raw.overdue_count),
     overdue_total_inr: toNum(raw.overdue_total_inr),
+    overdue_total_currency: String(raw.overdue_total_currency ?? "INR"),
     due_soon_count: toNum(raw.due_soon_count),
     due_soon_total_inr: toNum(raw.due_soon_total_inr),
+    due_soon_total_currency: String(raw.due_soon_total_currency ?? "INR"),
     aging_buckets: buckets,
   };
 }
 
 export async function getVendorSummaries(): Promise<ApiVendorSummary[]> {
-  const raw = await req<Array<Record<string, unknown>>>("/api/vendors");
+  const raw = await reqAuth<Array<Record<string, unknown>>>("/api/vendors");
+  // Tolerant of both shapes: the old summary shape (vendor_id,
+  // open_balance_inr, …) and the v1.1 CRUD shape (id, name, …), which
+  // carries no balances — those read as zero / unknown.
   return raw.map((v) => ({
-    vendor_id: String(v.vendor_id ?? ""),
-    vendor_name: String(v.vendor_name ?? ""),
+    vendor_id: String(v.vendor_id ?? v.id ?? ""),
+    vendor_name: String(v.vendor_name ?? v.name ?? ""),
     open_balance_inr: toNum(v.open_balance_inr),
     open_count: toNum(v.open_count),
     last_invoice_date: (v.last_invoice_date as string | null) ?? null,
@@ -275,7 +671,7 @@ export async function getVendorSummaries(): Promise<ApiVendorSummary[]> {
 }
 
 export async function getPayments(): Promise<ApiPayment[]> {
-  const raw = await req<Array<Record<string, unknown>>>("/api/payments");
+  const raw = await reqAuth<Array<Record<string, unknown>>>("/api/payments");
   return raw.map((p) => ({
     id: String(p.id ?? ""),
     invoice_id: String(p.invoice_id ?? ""),
@@ -286,7 +682,7 @@ export async function getPayments(): Promise<ApiPayment[]> {
 }
 
 export async function getForecast(): Promise<ApiForecast> {
-  const raw = await req<Record<string, unknown>>("/api/forecast");
+  const raw = await reqAuth<Record<string, unknown>>("/api/forecast");
   const weeks = Array.isArray(raw.weekly_outflows)
     ? (raw.weekly_outflows as Array<Record<string, unknown>>).map((w) => ({
         week_start: String(w.week_start ?? ""),
@@ -303,28 +699,40 @@ export async function getForecast(): Promise<ApiForecast> {
 
 export async function listInvoices(status?: string): Promise<ApiInvoice[]> {
   const q = status ? `?status=${encodeURIComponent(status)}` : "";
-  const raw = await req<Array<Record<string, unknown>>>(`/api/invoices${q}`);
+  const raw = await reqAuth<Array<Record<string, unknown>>>(`/api/invoices${q}`);
   return raw.map(normalizeInvoice);
 }
 
 export async function getInvoice(id: string): Promise<ApiInvoice> {
-  return normalizeInvoice(await req<Record<string, unknown>>(`/api/invoices/${encodeURIComponent(id)}`));
+  return normalizeInvoice(await reqAuth<Record<string, unknown>>(`/api/invoices/${encodeURIComponent(id)}`));
 }
 
 export async function uploadInvoice(file: File): Promise<ApiInvoice> {
   const form = new FormData();
   form.append("file", file);
   return normalizeInvoice(
-    await req<Record<string, unknown>>("/api/invoices/upload", {
+    await reqAuth<Record<string, unknown>>("/api/invoices/upload", {
       method: "POST",
       body: form,
     }),
   );
 }
 
+/** Re-run the pipeline for an on-hold / flagged invoice whose
+ * extraction failed. 202 with the reset row (status "received", error
+ * cleared); the re-run finishes in the background — poll getInvoice
+ * until the status moves. */
+export async function retryExtraction(id: string): Promise<ApiInvoice> {
+  return normalizeInvoice(
+    await reqAuth<Record<string, unknown>>(`/api/invoices/${encodeURIComponent(id)}/retry-extraction`, {
+      method: "POST",
+    }),
+  );
+}
+
 export async function approveInvoice(id: string, reason = ""): Promise<ApiInvoice> {
   return normalizeInvoice(
-    await req<Record<string, unknown>>(`/api/invoices/${encodeURIComponent(id)}/approve`, {
+    await reqAuth<Record<string, unknown>>(`/api/invoices/${encodeURIComponent(id)}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approver: "ap_clerk", reason }),
@@ -334,7 +742,7 @@ export async function approveInvoice(id: string, reason = ""): Promise<ApiInvoic
 
 export async function rejectInvoice(id: string, reason = ""): Promise<ApiInvoice> {
   return normalizeInvoice(
-    await req<Record<string, unknown>>(`/api/invoices/${encodeURIComponent(id)}/reject`, {
+    await reqAuth<Record<string, unknown>>(`/api/invoices/${encodeURIComponent(id)}/reject`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approver: "ap_clerk", reason }),
@@ -343,19 +751,19 @@ export async function rejectInvoice(id: string, reason = ""): Promise<ApiInvoice
 }
 
 export async function draftVendorQuery(id: string): Promise<{ invoice_id: string; draft: string; sent: boolean }> {
-  return req<{ invoice_id: string; draft: string; sent: boolean }>(
+  return reqAuth<{ invoice_id: string; draft: string; sent: boolean }>(
     `/api/invoices/${encodeURIComponent(id)}/query-vendor`,
     { method: "POST" },
   );
 }
 
 export async function getExceptions(): Promise<ApiInvoice[]> {
-  const raw = await req<Array<Record<string, unknown>>>("/api/queue/exceptions");
+  const raw = await reqAuth<Array<Record<string, unknown>>>("/api/queue/exceptions");
   return raw.map(normalizeInvoice);
 }
 
 export async function runEval(nPerScenario = 2): Promise<EvalResult> {
-  const raw = await req<{ kind: string; metrics: Record<string, unknown> }>(
+  const raw = await reqAuth<{ kind: string; metrics: Record<string, unknown> }>(
     `/api/eval/run?n_per_scenario=${nPerScenario}`,
     { method: "POST" },
   );
@@ -387,9 +795,12 @@ export function streamTrace(
   (async () => {
     let res: Response;
     try {
+      const streamHeaders: Record<string, string> = { Accept: "text/event-stream" };
+      if (accessToken) streamHeaders.Authorization = `Bearer ${accessToken}`;
       res = await fetch(`${API_BASE}/api/invoices/${encodeURIComponent(id)}/trace`, {
         signal: controller.signal,
-        headers: { Accept: "text/event-stream" },
+        credentials: "include",
+        headers: streamHeaders,
       });
     } catch {
       onError("Trace stream unreachable — backend may be down.");

@@ -1,6 +1,27 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { logoutUser } from "@/lib/api";
 
 export default function TopBar() {
+  const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const onLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await logoutUser();
+    } catch {
+      /* Logout clears the in-memory token regardless; still leave. */
+    } finally {
+      router.push("/login");
+      router.refresh();
+    }
+  };
+
   return (
     <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-hairline bg-page/90 px-8 py-4 backdrop-blur">
       <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-hairline bg-white px-3.5 text-sm text-muted shadow-card">
@@ -33,6 +54,15 @@ export default function TopBar() {
       <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-soft text-sm font-semibold text-primary-dark">
         PS
       </span>
+
+      <button
+        type="button"
+        onClick={() => void onLogout()}
+        disabled={loggingOut}
+        className="flex h-10 items-center rounded-full border border-hairline bg-white px-4 text-sm font-medium text-ink shadow-card hover:bg-slate-50 disabled:opacity-60"
+      >
+        {loggingOut ? "Logging out…" : "Log out"}
+      </button>
     </header>
   );
 }

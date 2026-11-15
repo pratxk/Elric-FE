@@ -1,34 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   BackendBanner,
+  BigMoney,
   Card,
   CardHeader,
   ExceptionPill,
   LiveTag,
-  MockTag,
+  Skeleton,
   StatusPill,
 } from "@/components/ui";
-import { getInvoice as getMockInvoice, type Invoice as MockInvoice, type InvoiceStatus } from "@/lib/mock-data";
-import { formatDate, inr } from "@/lib/format";
+import { formatDate, money, taxLabel } from "@/lib/format";
 import {
   ApiError,
   draftVendorQuery,
+  extractionFailureReason,
   getInvoice,
+  retryExtraction,
   streamTrace,
   type ApiInvoice,
   type TraceEvent,
 } from "@/lib/api";
-
-const traceDot: Record<string, string> = {
-  done: "bg-money-in",
-  active: "bg-primary",
-  waiting: "bg-slate-300",
-  failed: "bg-money-out",
-};
 
 function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
@@ -39,36 +34,47 @@ function traceLabel(action: string): string {
   return action.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+const linkCls =
+  "text-sm font-medium text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none";
+const primaryBtnCls =
+  "rounded-full bg-primary px-4 py-2 text-sm font-medium text-white transition-colors duration-150 ease-out hover:bg-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-40 motion-reduce:transition-none";
+const secondaryBtnCls =
+  "rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-card ring-1 ring-hairline transition-colors duration-150 ease-out hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none";
+
 export default function InvoiceDetailPage({ params }: { params: { id: string } }) {
   const [real, setReal] = useState<ApiInvoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [notFoundFlag, setNotFoundFlag] = useState(false);
   const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
   const [traceDone, setTraceDone] = useState(false);
   const [traceError, setTraceError] = useState<string | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [draftLoading, setDraftLoading] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [retryNote, setRetryNote] = useState<string | null>(null);
 
-  const mock = getMockInvoice(params.id);
+  const load = useCallback(() => {
+    setLoading(true);
+    setApiError(null);
+    setNotFoundFlag(false);
+    getInvoice(params.id)
+      .then((inv) => setReal(inv))
+      .catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) {
+          setNotFoundFlag(true);
+        } else {
+          setApiError(e instanceof Error ? e.message : "Failed to load invoice");
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [params.id]);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    getInvoice(params.id)
-      .then((inv) => {
-        if (!cancelled) setReal(inv);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setApiError(e instanceof Error ? e.message : "Failed to load invoice");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [params.id]);
+    load();
+  }, [load]);
 
   // Live trace (SSE) once we have a real invoice.
   useEffect(() => {
@@ -88,13 +94,45 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
   if (loading) {
     return (
       <div>
-        <p className="mt-5 text-sm text-muted">Loading invoice…</p>
+        <Skeleton className="h-4 w-24" />
+        <Skeleton className="mt-3 h-8 w-96" />
+        <Skeleton className="mt-2 h-4 w-80" />
+        <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <Card>
+            <div className="space-y-3 px-5 py-5" aria-hidden="true">
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+            </div>
+          </Card>
+          <Card>
+            <div className="space-y-3 px-5 py-5" aria-hidden="true">
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+          </Card>
+        </div>
       </div>
     );
   }
 
-  // No real invoice and no mock match → 404.
-  if (!real && !mock) notFound();
+  if (notFoundFlag) notFound();
+
+  if (apiError !== null || !real) {
+    return (
+      <div>
+        <Link href="/inbox" className={linkCls}>
+          ← All invoices
+        </Link>
+        <h1 className="mt-1 text-[26px] font-semibold leading-8 text-ink">Invoice not loaded</h1>
+        <BackendBanner
+          message={`This invoice could not be loaded. ${apiError ?? "Unknown error."}`}
+          onRetry={load}
+        />
+      </div>
+    );
+  }
 
   const onDraft = async () => {
     if (!real) return;
@@ -110,11 +148,36 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
     }
   };
 
-  /* ---------------------------------------------------------- mock render */
-  if (!real && mock) return <MockDetail inv={mock} apiError={apiError} />;
+  /** Re-run extraction for a parked invoice. The retry runs in the
+   * background — poll until the invoice leaves "received" (or 30s
+   * elapse, then the user refreshes). */
+  const onRetry = async () => {
+    if (!real || retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    setRetryNote(null);
+    try {
+      await retryExtraction(real.id);
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const fresh = await getInvoice(real.id);
+        setReal(fresh);
+        if (fresh.status !== "received") {
+          setRetrying(false);
+          return;
+        }
+      }
+      setRetryNote("Still processing — refresh the page to check the result.");
+      setRetrying(false);
+    } catch (e) {
+      setRetryError(e instanceof Error ? e.message : "Retry failed.");
+      setRetrying(false);
+    }
+  };
 
-  /* ---------------------------------------------------------- real render */
-  const inv = real as ApiInvoice;
+  const inv = real;
+  const failureReason = extractionFailureReason(inv);
+  const retryable = (inv.status === "on_hold" || inv.status === "flagged") && failureReason !== null;
   const rootCauses = inv.exceptions.map((e) => e.root_cause).filter(Boolean) as string[];
   const subtotal = inv.subtotal;
 
@@ -122,7 +185,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
     <div>
       <div className="flex items-start justify-between">
         <div>
-          <Link href="/inbox" className="text-sm font-medium text-primary hover:text-primary-dark">
+          <Link href="/inbox" className={linkCls}>
             ← All invoices
           </Link>
           <h1 className="mt-1 text-[26px] font-semibold leading-8 text-ink">
@@ -135,16 +198,31 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
         </div>
         <div className="flex items-center gap-2">
           <LiveTag />
-          <StatusPill status={inv.status as InvoiceStatus} />
+          <StatusPill status={inv.status} />
         </div>
       </div>
 
-      {apiError === null && (
-        <p className="mt-3 rounded-lg border border-hairline bg-page px-3 py-2 text-xs text-muted">
-          Live data from GET /api/invoices/{shortId(inv.id)}. This upload was parked by the backend pipeline —
-          with no Gemini key configured, extraction never ran, so vendor, lines and match data are empty until a key
-          is set and the invoice is re-processed.
-        </p>
+      {failureReason !== null ? (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-sm font-medium text-amber-800">Extraction did not run</p>
+          <p className="mt-1 text-sm leading-6 text-amber-800">{failureReason}</p>
+          {retryable && (
+            <div className="mt-3 flex items-center gap-3">
+              <button type="button" onClick={() => void onRetry()} disabled={retrying} className={primaryBtnCls}>
+                {retrying ? "Reprocessing…" : "Retry extraction"}
+              </button>
+              {retryNote && <span className="text-xs text-amber-800">{retryNote}</span>}
+              {retryError && <span className="text-xs text-red-700">{retryError}</span>}
+            </div>
+          )}
+        </div>
+      ) : (
+        inv.lines.length === 0 &&
+        !inv.match && (
+          <p className="mt-3 rounded-lg border border-hairline bg-page px-3 py-2 text-xs text-muted">
+            Extraction has not run for this invoice yet — vendor, lines and match data will appear once it does.
+          </p>
+        )
       )}
 
       <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
@@ -189,21 +267,21 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                           {l.hsn_code && <span className="block text-xs text-muted">HSN {l.hsn_code}</span>}
                         </td>
                         <td className="py-2 text-right tnum">{l.qty}</td>
-                        <td className="py-2 text-right tnum">{inr(l.unit_price)}</td>
-                        <td className="py-2 text-right font-medium tnum">{inr(l.qty * l.unit_price)}</td>
+                        <td className="py-2 text-right tnum">{money(l.unit_price, inv.currency)}</td>
+                        <td className="py-2 text-right font-medium tnum">{money(l.qty * l.unit_price, inv.currency)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
                 <div className="mt-4 space-y-1 border-t border-hairline pt-3 text-right">
                   <p className="text-sm text-muted">
-                    Subtotal <span className="ml-6 inline-block w-28 text-ink tnum">{inr(subtotal)}</span>
+                    Subtotal <span className="ml-6 inline-block w-28 text-ink tnum">{money(subtotal, inv.currency)}</span>
                   </p>
                   <p className="text-sm text-muted">
-                    Tax <span className="ml-6 inline-block w-28 text-ink tnum">{inr(inv.tax_total)}</span>
+                    Tax <span className="ml-6 inline-block w-28 text-ink tnum">{money(inv.tax_total, inv.currency)}</span>
                   </p>
                   <p className="text-base font-semibold text-ink">
-                    Total <span className="ml-6 inline-block w-28 tnum">{inr(inv.total)}</span>
+                    Total <span className="ml-6 inline-block w-28 tnum"><BigMoney amount={inv.total} currency={inv.currency} /></span>
                   </p>
                 </div>
               </div>
@@ -213,9 +291,8 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                 <p className="mt-1 leading-6">
                   The file was stored (hash{" "}
                   <code className="rounded bg-white px-1 py-0.5 text-xs">{(inv.document_hash ?? "").slice(0, 12) || "—"}…</code>)
-                  but the extractor could not run — no Gemini key is configured on this backend. The invoice is
-                  parked as <span className="font-medium text-ink">{inv.status}</span> for human review. The styled
-                  document viewer from the demo is kept for mock invoices (e.g. INV-2481).
+                  {failureReason ? ` — ${failureReason}` : " — the extractor has not run for this invoice yet."} The
+                  invoice is parked as <span className="font-medium text-ink">{inv.status}</span> for human review.
                 </p>
               </div>
             )}
@@ -233,9 +310,9 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                 ["Invoice date", formatDate(inv.invoice_date)],
                 ["Due date", formatDate(inv.due_date ?? "")],
                 ["PO number", inv.match?.po_id ?? "Not found"],
-                ["Subtotal", inr(subtotal)],
-                ["Tax (GST)", inr(inv.tax_total)],
-                ["Total", inr(inv.total)],
+                ["Subtotal", money(subtotal, inv.currency)],
+                [taxLabel(inv.currency), money(inv.tax_total, inv.currency)],
+                ["Total", money(inv.total, inv.currency)],
                 ["Lines", `${inv.lines.length} line${inv.lines.length === 1 ? "" : "s"}`],
                 ["Document hash", inv.document_hash ? `${inv.document_hash.slice(0, 12)}…` : "—"],
               ].map(([k, v]) => (
@@ -253,14 +330,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
               <ul className="space-y-3 px-5 pb-5 pt-3">
                 {inv.exceptions.map((e) => (
                   <li key={e.code} className="text-sm">
-                    {["PRICE_VARIANCE", "QTY_SHORT", "DUPLICATE", "MISSING_PO", "TAX_MISMATCH", "TOTAL_MISMATCH"].includes(e.code) ? (
-                      <ExceptionPill type={e.code as never} />
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                        {e.code}
-                      </span>
-                    )}
+                    <ExceptionPill type={e.code} />
                     <p className="mt-1 leading-6 text-ink">{e.message}</p>
                     {e.root_cause && <p className="mt-1 text-muted">{e.root_cause}</p>}
                   </li>
@@ -309,7 +379,10 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
               </thead>
               <tbody>
                 {inv.match.rule_outcomes.map((r) => (
-                  <tr key={r.rule} className={`border-t border-hairline ${r.passed ? "" : "bg-amber-50/50"}`}>
+                  <tr
+                    key={r.rule}
+                    className={`border-t border-hairline transition-colors duration-150 ease-out hover:bg-slate-50 motion-reduce:transition-none ${r.passed ? "" : "bg-amber-50/50"}`}
+                  >
                     <td className="px-3 py-3 font-mono text-xs text-ink">{r.rule}</td>
                     <td className="px-3 py-3">
                       {r.passed ? (
@@ -343,8 +416,8 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
           </div>
         ) : (
           <p className="px-5 pb-5 pt-3 text-sm leading-6 text-muted">
-            No match has run for this invoice yet — the matcher needs extracted lines, and extraction is parked
-            (no Gemini key). The demo 3-way match table is kept for mock invoices (e.g. INV-2481).
+            No match has run for this invoice yet — the matcher needs extracted lines.
+            {failureReason ? ` ${failureReason}` : ""}
           </p>
         )}
       </Card>
@@ -354,12 +427,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
         <CardHeader
           title="Vendor query"
           action={
-            <button
-              type="button"
-              onClick={onDraft}
-              disabled={draftLoading}
-              className="rounded-full bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-40"
-            >
+            <button type="button" onClick={onDraft} disabled={draftLoading} className={primaryBtnCls}>
               {draftLoading ? "Drafting…" : "Draft vendor query"}
             </button>
           }
@@ -432,228 +500,10 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
       </Card>
 
       <div className="mt-5 flex gap-2">
-        <Link href="/approvals" className="rounded-full bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark">
+        <Link href="/approvals" className={primaryBtnCls}>
           Go to approvals
         </Link>
-        <Link href="/exceptions" className="rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-card ring-1 ring-hairline hover:bg-slate-50">
-          Back to exceptions
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ mock */
-
-function MockDetail({ inv, apiError }: { inv: MockInvoice; apiError: string | null }) {
-  const subtotal = inv.amount - inv.tax;
-  const matchedCount = inv.matchRows.filter((r) => r.status === "matched").length;
-
-  return (
-    <div>
-      <div className="flex items-start justify-between">
-        <div>
-          <Link href="/inbox" className="text-sm font-medium text-primary hover:text-primary-dark">
-            ← All invoices
-          </Link>
-          <h1 className="mt-1 text-[26px] font-semibold leading-8 text-ink">
-            {inv.id} <span className="font-normal text-muted">· {inv.number}</span>
-          </h1>
-          <p className="mt-1 text-sm text-muted">
-            {inv.vendor} · GSTIN {inv.gstin} · Invoice {formatDate(inv.invoiceDate)} · Due {formatDate(inv.dueDate)}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <MockTag />
-          <StatusPill status={inv.status} />
-        </div>
-      </div>
-
-      {apiError !== null && (
-        <p className="mt-3 text-xs text-muted">
-          Backend lookup failed ({apiError}) — showing the demo invoice. Start the backend to see live data.
-        </p>
-      )}
-
-      <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <Card>
-          <CardHeader title="Invoice document" action={<span className="text-xs text-muted">Mock document · not a real PDF</span>} />
-          <div className="px-5 pb-5 pt-4">
-            <div className="rounded-lg border border-hairline bg-white p-5 text-sm">
-              <div className="flex items-start justify-between border-b border-hairline pb-4">
-                <div>
-                  <p className="text-base font-bold text-ink">{inv.vendor}</p>
-                  <p className="mt-1 text-xs leading-5 text-muted">
-                    GSTIN {inv.gstin}
-                    <br />
-                    Tax Invoice · FY 2026–27
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs text-muted">Invoice No.</p>
-                  <p className="font-semibold text-ink">{inv.number}</p>
-                  <p className="mt-1 text-xs text-muted">Date {formatDate(inv.invoiceDate)}</p>
-                </div>
-              </div>
-              <table className="mt-4 w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-muted">
-                    <th className="py-1.5 font-medium">Description</th>
-                    <th className="py-1.5 text-right font-medium">Qty</th>
-                    <th className="py-1.5 text-right font-medium">Rate</th>
-                    <th className="py-1.5 text-right font-medium">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inv.lines.map((l) => (
-                    <tr key={l.description} className="border-t border-hairline align-top">
-                      <td className="py-2 pr-2 text-ink">
-                        {l.description}
-                        <span className="block text-xs text-muted">HSN {l.hsn}</span>
-                      </td>
-                      <td className="py-2 text-right tnum">{l.qty}</td>
-                      <td className="py-2 text-right tnum">{inr(l.unitPrice)}</td>
-                      <td className="py-2 text-right font-medium tnum">{inr(l.amount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="mt-4 space-y-1 border-t border-hairline pt-3 text-right">
-                <p className="text-sm text-muted">
-                  Subtotal <span className="ml-6 inline-block w-28 text-ink tnum">{inr(subtotal)}</span>
-                </p>
-                <p className="text-sm text-muted">
-                  GST (18%) <span className="ml-6 inline-block w-28 text-ink tnum">{inr(inv.tax)}</span>
-                </p>
-                <p className="text-base font-semibold text-ink">
-                  Total <span className="ml-6 inline-block w-28 tnum">{inr(inv.amount)}</span>
-                </p>
-              </div>
-              <p className="mt-4 text-xs text-muted">
-                PO {inv.poNumber ?? "— not on file"} · Payment due {formatDate(inv.dueDate)} · NEFT to vendor account on record.
-              </p>
-            </div>
-          </div>
-        </Card>
-
-        <div className="space-y-5">
-          <Card>
-            <CardHeader title="Extracted fields" action={<span className="text-xs text-muted">Avg confidence 0.97</span>} />
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 px-5 py-4 text-sm">
-              {[
-                ["Vendor", inv.vendor],
-                ["GSTIN", inv.gstin],
-                ["Invoice no.", inv.number],
-                ["Invoice date", formatDate(inv.invoiceDate)],
-                ["Due date", formatDate(inv.dueDate)],
-                ["PO number", inv.poNumber ?? "Not found"],
-                ["Subtotal", inr(subtotal)],
-                ["Tax (GST)", inr(inv.tax)],
-                ["Total", inr(inv.amount)],
-                ["Lines", `${inv.lines.length} line${inv.lines.length === 1 ? "" : "s"}`],
-              ].map(([k, v]) => (
-                <div key={k}>
-                  <dt className="text-xs text-muted">{k}</dt>
-                  <dd className="mt-0.5 font-medium text-ink tnum">{v}</dd>
-                </div>
-              ))}
-            </dl>
-          </Card>
-
-          {inv.rootCause && (
-            <Card>
-              <CardHeader title="Exception root cause" />
-              <p className="px-5 pb-5 pt-3 text-sm leading-6 text-ink">{inv.rootCause}</p>
-            </Card>
-          )}
-        </div>
-      </div>
-
-      <Card className="mt-5">
-        <CardHeader
-          title="3-way match — Invoice vs PO vs Receipt"
-          action={
-            <span className="text-sm text-muted">
-              {matchedCount} of {inv.matchRows.length} lines matched
-            </span>
-          }
-        />
-        <div className="overflow-x-auto px-2 pb-2 pt-2">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-muted">
-                <th className="px-3 py-2 font-medium">Line</th>
-                <th className="px-3 py-2 text-right font-medium">Invoice qty</th>
-                <th className="px-3 py-2 text-right font-medium">PO qty</th>
-                <th className="px-3 py-2 text-right font-medium">Receipt qty</th>
-                <th className="px-3 py-2 text-right font-medium">Invoice price</th>
-                <th className="px-3 py-2 text-right font-medium">PO price</th>
-                <th className="px-3 py-2 text-right font-medium">Variance</th>
-                <th className="px-3 py-2 font-medium">Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {inv.matchRows.map((r) => (
-                <tr key={r.line} className={`border-t border-hairline ${r.status === "variance" ? "bg-amber-50/50" : ""}`}>
-                  <td className="px-3 py-3 text-ink">{r.line}</td>
-                  <td className="px-3 py-3 text-right tnum">{r.invoiceQty}</td>
-                  <td className="px-3 py-3 text-right tnum">{r.poQty}</td>
-                  <td className="px-3 py-3 text-right tnum">{r.receiptQty}</td>
-                  <td className="px-3 py-3 text-right tnum">{inr(r.invoicePrice)}</td>
-                  <td className="px-3 py-3 text-right tnum">{inr(r.poPrice)}</td>
-                  <td className={`px-3 py-3 text-right font-mono font-medium tnum ${r.variance === 0 ? "text-muted" : "text-money-out"}`}>
-                    {r.variance === 0 ? "₹0.00" : `+${inr(r.variance)}`}
-                  </td>
-                  <td className="px-3 py-3">
-                    {r.status === "matched" ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-2.5 py-1 text-xs font-medium text-green-700">
-                        <span className="h-1.5 w-1.5 rounded-full bg-money-in" /> Matched
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber" /> Variance
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      <Card className="mt-5">
-        <CardHeader
-          title="Agent trace"
-          action={<span className="text-xs text-muted">Mock trace — live SSE stream lands on real invoices</span>}
-        />
-        <ol className="space-y-0 px-5 pb-5 pt-3">
-          {inv.trace.map((s, i) => (
-            <li key={s.step} className="relative flex gap-3 pb-5 last:pb-0">
-              {i < inv.trace.length - 1 && (
-                <span className="absolute left-[7px] top-5 h-full w-px bg-hairline" aria-hidden />
-              )}
-              <span className={`relative mt-1.5 h-[15px] w-[15px] shrink-0 rounded-full border-2 border-white shadow-sm ${traceDot[s.status]}`} />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-ink">
-                  {s.agent} — {s.step}
-                  <span className="ml-2 text-xs font-normal text-muted">
-                    {s.status === "done" ? "Done" : s.status === "active" ? "Running…" : s.status === "failed" ? "Failed" : "Waiting"}
-                    {s.durationMs !== undefined && s.durationMs > 0 ? ` · ${(s.durationMs / 1000).toFixed(1)}s` : ""}
-                  </span>
-                </p>
-                <p className="mt-0.5 text-sm text-muted">{s.detail}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-      </Card>
-
-      <div className="mt-5 flex gap-2">
-        <Link href="/approvals" className="rounded-full bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark">
-          Go to approvals
-        </Link>
-        <Link href="/exceptions" className="rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-card ring-1 ring-hairline hover:bg-slate-50">
+        <Link href="/exceptions" className={secondaryBtnCls}>
           Back to exceptions
         </Link>
       </div>

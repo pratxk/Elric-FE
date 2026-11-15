@@ -1,19 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { BackendBanner, Card, CardHeader, LiveTag, MockTag, StatusPill } from "@/components/ui";
+import {
+  BackendBanner,
+  BigMoney,
+  Card,
+  CardHeader,
+  EmptyState,
+  LiveTag,
+  Skeleton,
+  StatusPill,
+} from "@/components/ui";
 import MoneyChart from "@/components/MoneyChart";
-import { dashboard, invoices as mockInvoices, moneyMovement, vendors, type InvoiceStatus } from "@/lib/mock-data";
-import { ageDays, formatDate, inr, inrCompact } from "@/lib/format";
+import { ageDays, commonCurrency, formatDate, inr, inrCompact, money, moneyCompact } from "@/lib/format";
 import {
   getForecast,
   getMetrics,
   getPayments,
   getVendorSummaries,
   listInvoices,
+  listVendors,
+  mergeVendorRows,
   useApi,
   type ApiInvoice,
 } from "@/lib/api";
+import { useMemo } from "react";
+
+/**
+ * Dashboard — live API only. Every card gates on its own fetch:
+ * skeleton (grey blocks, no numbers) → real data → honest empty state
+ * → error state. No number renders before its fetch resolves, and no
+ * figure is ever invented. There is no bank feed, so there is no cash
+ * position card at all.
+ */
 
 const actionPills = [
   { label: "Upload Invoice", href: "/inbox", primary: true },
@@ -33,94 +52,105 @@ function shortWeekLabel(iso: string): string {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
+const linkCls =
+  "text-sm font-medium text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none";
+
 export default function DashboardPage() {
   const metrics = useApi(getMetrics);
   const invList = useApi(listInvoices);
   const vendorList = useApi(getVendorSummaries);
+  const vendorRegistry = useApi(listVendors);
   const paymentList = useApi(getPayments);
   const forecast = useApi(getForecast);
-  const live = metrics.data !== null && invList.data !== null;
-  const vendorsLive = vendorList.data !== null;
-  const paymentsLive = paymentList.data !== null;
-  const forecastLive = forecast.data !== null;
-  const backendDown = metrics.error !== null && invList.error !== null;
+
+  // Vendor balances = registered vendors merged with invoice-derived
+  // balances (see mergeVendorRows): a vendor added in onboarding shows
+  // here with ₹0.00 even before its first invoice. Invoices supply
+  // each vendor's currency, so a USD vendor's balance shows in $.
+  const vendorRows = useMemo(
+    () =>
+      vendorList.data !== null && vendorRegistry.data !== null
+        ? mergeVendorRows(vendorRegistry.data, vendorList.data, invList.data ?? [])
+        : [],
+    [vendorList.data, vendorRegistry.data, invList.data],
+  );
+  const vendorsLoaded = vendorList.data !== null && vendorRegistry.data !== null;
 
   const m = metrics.data;
   const realInvoices: ApiInvoice[] = invList.data ?? [];
-
-  // Pipeline derived from real by_status + invoice totals (live) or mock.
   const byStatus = m?.by_status ?? {};
-  const openCount = live
-    ? realInvoices.filter((i) => !["paid", "rejected", "duplicate"].includes(i.status)).length
-    : dashboard.pipeline.open;
-  const paidCount = live ? (byStatus.paid ?? 0) : dashboard.pipeline.paid;
-  const openValue = live
-    ? realInvoices
-        .filter((i) => !["paid", "rejected", "duplicate"].includes(i.status))
-        .reduce((s, i) => s + i.total, 0)
-    : dashboard.pipeline.openValue;
-  const paidValue = live
-    ? realInvoices.filter((i) => i.status === "paid").reduce((s, i) => s + i.total, 0)
-    : dashboard.pipeline.paidValue;
 
-  const recent = live ? realInvoices.slice(0, 5) : mockInvoices.slice(0, 5);
-  // Vendor balances: live open AP per vendor from /api/vendors. The
-  // backend has no reliability history, so that score is not shown live.
-  const liveTopVendors = (vendorList.data ?? []).slice(0, 5);
-  const mockTopVendors = [...vendors].sort((a, b) => b.balance - a.balance).slice(0, 5);
+  const openInvoices = realInvoices.filter((i) => !["paid", "rejected", "duplicate"].includes(i.status));
+  const openCount = openInvoices.length;
+  const paidInvoices = realInvoices.filter((i) => i.status === "paid");
+  const paidCount = byStatus.paid ?? paidInvoices.length;
+  const openValue = openInvoices.reduce((s, i) => s + i.total, 0);
+  const paidValue = paidInvoices.reduce((s, i) => s + i.total, 0);
 
-  const pendingTotal = live ? (m?.money_in_exceptions_inr ?? 0) : dashboard.pendingApprovalTotal;
-  const pendingCount = live ? (m?.exceptions_open ?? 0) : dashboard.pendingApprovalCount;
+  const pendingTotal = m?.money_in_exceptions_inr ?? 0;
+  const pendingCount = m?.exceptions_open ?? 0;
 
-  // Money movement: live paid vs scheduled totals from /api/payments.
   const payments = paymentList.data ?? [];
   const paidTotal = payments.filter((p) => p.status === "paid").reduce((s, p) => s + p.amount, 0);
   const scheduledTotal = payments
     .filter((p) => p.status === "scheduled")
     .reduce((s, p) => s + p.amount, 0);
+  // Payments carry no currency of their own — each is its invoice's
+  // amount, so the money-movement figures use the invoice currency
+  // when every payment in the set shares one, else the workspace INR.
+  const invoiceCurrency = new Map(realInvoices.map((i) => [i.id, i.currency]));
+  const paidCurrency = commonCurrency(
+    payments.filter((p) => p.status === "paid").map((p) => invoiceCurrency.get(p.invoice_id)),
+  );
+  const scheduledCurrency = commonCurrency(
+    payments.filter((p) => p.status === "scheduled").map((p) => invoiceCurrency.get(p.invoice_id)),
+  );
   const nextPayment = payments
     .filter((p) => p.status === "scheduled")
     .map((p) => p.scheduled_date)
     .sort()[0];
 
-  // Chart: live projected outflows by week from /api/forecast (AP has
-  // no money-in, so the chart shows outflows only when live).
-  const chartLabels = forecastLive
-    ? forecast.data!.weekly_outflows.map((w) => shortWeekLabel(w.week_start))
-    : moneyMovement.labels;
-  const chartOut = forecastLive
-    ? forecast.data!.weekly_outflows.map((w) => w.projected_outflow_inr)
-    : moneyMovement.moneyOut;
+  const chartLabels = (forecast.data?.weekly_outflows ?? []).map((w) => shortWeekLabel(w.week_start));
+  const chartOut = (forecast.data?.weekly_outflows ?? []).map((w) => w.projected_outflow_inr);
+
+  const retryAll = () => {
+    metrics.refresh();
+    invList.refresh();
+    vendorList.refresh();
+    vendorRegistry.refresh();
+    paymentList.refresh();
+    forecast.refresh();
+  };
+  const anyError =
+    metrics.error !== null ||
+    invList.error !== null ||
+    vendorList.error !== null ||
+    vendorRegistry.error !== null ||
+    paymentList.error !== null ||
+    forecast.error !== null;
 
   return (
     <div>
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-[26px] font-semibold leading-8 text-ink">Welcome back</h1>
-          <p className="mt-1 text-sm text-muted">
-            {pendingCount} invoice{pendingCount === 1 ? "" : "s"} await approval · {inr(pendingTotal)} held in
-            exceptions · Nov 2026
-          </p>
+          {metrics.loading ? (
+            <Skeleton className="mt-2 h-4 w-72" />
+          ) : metrics.error !== null ? (
+            <p className="mt-1 text-sm text-amber-700">Summary unavailable — the backend could not be reached.</p>
+          ) : (
+            <p className="mt-1 text-sm text-muted">
+              {pendingCount} invoice{pendingCount === 1 ? "" : "s"} await approval ·{" "}
+              <span className="tnum">{money(pendingTotal, m?.money_in_exceptions_currency ?? "INR")}</span> held in exceptions
+            </p>
+          )}
         </div>
-        {live ? <LiveTag /> : <MockTag />}
+        {metrics.data !== null && <LiveTag />}
       </div>
 
-      {backendDown && (
-        <BackendBanner
-          onRetry={() => {
-            metrics.refresh();
-            invList.refresh();
-            vendorList.refresh();
-            paymentList.refresh();
-            forecast.refresh();
-          }}
-        />
-      )}
-      {metrics.loading && invList.loading && (
-        <p className="mt-5 text-sm text-muted">Loading live data from the backend…</p>
-      )}
+      {anyError && <BackendBanner onRetry={retryAll} />}
 
-      {/* Action pill row */}
+      {/* Action pill row — Mercury: filled primary, flat grey secondaries */}
       <div className="mt-5 flex flex-wrap items-center gap-2">
         {actionPills.map((p) => (
           <Link
@@ -128,8 +158,8 @@ export default function DashboardPage() {
             href={p.href}
             className={
               p.primary
-                ? "rounded-full bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark"
-                : "rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-card ring-1 ring-hairline hover:bg-slate-50"
+                ? "rounded-full bg-primary px-4 py-2 text-sm font-medium text-white transition-colors duration-150 ease-out hover:bg-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
+                : "rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-ink transition-colors duration-150 ease-out hover:bg-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
             }
           >
             {p.label}
@@ -138,43 +168,50 @@ export default function DashboardPage() {
         <span className="ml-auto text-sm text-muted">Customize</span>
       </div>
 
-      {/* Pending approval + cash position | Vendor balances */}
+      {/* Pending approval | Vendor balances */}
       <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-5">
         <Card className="lg:col-span-3">
-          <CardHeader
-            title="Pending approval"
-            action={live ? <LiveTag /> : <MockTag />}
-          />
+          <CardHeader title="Pending approval" action={metrics.data !== null ? <LiveTag /> : undefined} />
           <div className="px-5 pt-2">
-            <p className="text-[32px] font-semibold leading-9 text-ink tnum">{inr(pendingTotal)}</p>
-            <div className="mt-2 flex items-center gap-4 text-sm">
-              {forecastLive ? (
-                <span className="inline-flex items-center gap-1 font-medium text-money-out tnum">
-                  ↘ {inrCompact(forecast.data!.total_projected_inr)} projected out · next 4 wks
-                </span>
-              ) : (
-                <>
-                  <span className="text-muted">Last 30 days</span>
-                  <span className="inline-flex items-center gap-1 font-medium text-money-in tnum">
-                    ↗ {inrCompact(dashboard.moneyIn30d)} in
+            {metrics.loading ? (
+              <>
+                <Skeleton className="h-9 w-64" />
+                <Skeleton className="mt-3 h-4 w-56" />
+              </>
+            ) : metrics.error !== null ? (
+              <p className="py-2 text-sm text-amber-700">
+                Pending-approval totals could not be loaded. {metrics.error}
+              </p>
+            ) : (
+              <>
+                <p className="text-[32px] font-semibold leading-9 text-ink">
+                  <span data-testid="pending-total">
+                    <BigMoney amount={pendingTotal} currency={m?.money_in_exceptions_currency ?? "INR"} />
                   </span>
-                  <span className="inline-flex items-center gap-1 font-medium text-money-out tnum">
-                    ↘ −{inrCompact(dashboard.moneyOut30d)} out
-                  </span>
-                  <MockTag />
-                </>
-              )}
-            </div>
-            <p className="mt-3 text-sm text-muted">
-              Cash position <span className="font-medium text-ink tnum">{inr(dashboard.cashPosition)}</span> · HDFC Current A/c ·{" "}
-              <span className="text-xs">demo figure — no bank feed connected</span>
-            </p>
+                </p>
+                <div className="mt-2 flex items-center gap-4 text-sm">
+                  {forecast.loading ? (
+                    <Skeleton className="h-4 w-56" />
+                  ) : forecast.error !== null ? (
+                    <span className="text-muted">Forecast unavailable</span>
+                  ) : forecast.data !== null ? (
+                    <span className="inline-flex items-center gap-1 font-medium text-money-out tnum">
+                      ↘ {inrCompact(forecast.data.total_projected_inr)} projected out · next 4 wks
+                    </span>
+                  ) : null}
+                </div>
+              </>
+            )}
           </div>
           <div className="px-5 pb-5 pt-4">
-            {forecastLive ? (
-              <MoneyChart labels={chartLabels} moneyIn={[]} moneyOut={chartOut} showIn={false} />
+            {forecast.loading ? (
+              <Skeleton className="h-[180px] w-full" />
+            ) : forecast.error !== null ? (
+              <p className="py-8 text-center text-sm text-muted">
+                Forecast could not be loaded. {forecast.error}
+              </p>
             ) : (
-              <MoneyChart labels={moneyMovement.labels} moneyIn={moneyMovement.moneyIn} moneyOut={moneyMovement.moneyOut} />
+              <MoneyChart labels={chartLabels} moneyIn={[]} moneyOut={chartOut} showIn={false} />
             )}
           </div>
         </Card>
@@ -184,130 +221,173 @@ export default function DashboardPage() {
             title="Vendor balances"
             action={
               <span className="flex items-center gap-2">
-                {!vendorsLive && <MockTag />}
-                <Link href="/vendors" className="text-sm font-medium text-primary hover:text-primary-dark">
+                {vendorsLoaded && <LiveTag />}
+                <Link href="/vendors" className={linkCls}>
                   View all
                 </Link>
               </span>
             }
           />
-          <ul className="px-2 pb-3 pt-2">
-            {vendorsLive
-              ? liveTopVendors.map((v) => (
-                  <li key={v.vendor_id}>
-                    <Link href="/vendors" className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-slate-50">
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-xs font-semibold text-primary-dark">
-                        {v.vendor_name.slice(0, 1)}
+          {vendorList.loading || vendorRegistry.loading ? (
+            <ul className="space-y-1 px-2 pb-3 pt-2" aria-hidden="true">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <li key={i} className="flex items-center gap-3 px-3 py-2.5">
+                  <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
+                  <span className="min-w-0 flex-1">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="mt-1.5 h-3 w-24" />
+                  </span>
+                  <Skeleton className="h-4 w-20" />
+                </li>
+              ))}
+            </ul>
+          ) : vendorList.error !== null || vendorRegistry.error !== null ? (
+            <p className="px-5 pb-5 pt-3 text-sm text-amber-700">
+              Vendor balances could not be loaded. {vendorList.error ?? vendorRegistry.error}
+            </p>
+          ) : vendorRows.length === 0 ? (
+            <EmptyState
+              title="No vendors yet"
+              body="Vendor balances appear once invoices are uploaded and extracted."
+              ctaHref="/inbox"
+              ctaLabel="Upload your first invoice"
+            />
+          ) : (
+            <ul data-testid="vendor-balances" className="px-2 pb-3 pt-2">
+              {vendorRows.slice(0, 5).map((v) => (
+                <li key={v.id}>
+                  <Link
+                    href="/vendors"
+                    className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors duration-150 ease-out hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none"
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-xs font-semibold text-primary-dark">
+                      {v.name.slice(0, 1)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-ink">{v.name}</span>
+                      <span className="block text-xs text-muted">
+                        {v.openCount} open ·{" "}
+                        {v.lastInvoiceDate ? `last ${formatDate(v.lastInvoiceDate)}` : "no invoices"}
                       </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-ink">{v.vendor_name}</span>
-                        <span className="block text-xs text-muted">
-                          {v.open_count} open ·{" "}
-                          {v.last_invoice_date ? `last ${formatDate(v.last_invoice_date)}` : "no invoices"}
-                        </span>
-                      </span>
-                      <span className="text-sm font-medium text-ink tnum">{inr(v.open_balance_inr)}</span>
-                    </Link>
-                  </li>
-                ))
-              : mockTopVendors.map((v) => (
-                  <li key={v.id}>
-                    <Link href="/vendors" className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-slate-50">
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-xs font-semibold text-primary-dark">
-                        {v.name.slice(0, 1)}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-ink">{v.name}</span>
-                        <span className="block text-xs text-muted">Reliability {v.reliability}% · {v.openInvoices} open</span>
-                      </span>
-                      <span className="text-sm font-medium text-ink tnum">{inr(v.balance)}</span>
-                    </Link>
-                  </li>
-                ))}
-          </ul>
+                    </span>
+                    <span data-testid="vendor-balance" className="text-sm font-medium text-ink tnum">
+                      {money(v.openBalanceInr, v.currency)}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </div>
 
       {/* Exceptions | Pipeline | Money movement summary */}
       <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-3">
         <Card>
-          <CardHeader title="Exceptions" action={live ? <LiveTag /> : <MockTag />} />
-          <div className="flex gap-6 px-5 pb-2 pt-3">
-            <div>
-              <p className="text-xs text-muted">Outstanding</p>
-              <p className="mt-0.5 text-xl font-semibold text-ink tnum">
-                {live ? (m?.exceptions_open ?? 0) : dashboard.exceptions.outstanding}
-              </p>
+          <CardHeader title="Exceptions" action={metrics.data !== null ? <LiveTag /> : undefined} />
+          {metrics.loading ? (
+            <div className="flex gap-6 px-5 pb-5 pt-3">
+              <Skeleton className="h-10 w-16" />
+              <Skeleton className="h-10 w-16" />
+              <Skeleton className="h-10 w-16" />
             </div>
-            <div>
-              <p className="text-xs text-muted">Overdue</p>
-              <p className="mt-0.5 text-xl font-semibold text-money-out tnum">
-                {live ? (m?.overdue_count ?? 0) : dashboard.exceptions.overdue}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted">Due soon</p>
-              <p className="mt-0.5 text-xl font-semibold text-ink tnum">
-                {live ? (m?.due_soon_count ?? 0) : dashboard.exceptions.dueSoon}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center justify-between border-t border-hairline px-5 py-3.5">
-            <span className="text-sm text-muted">
-              Queue · <span className="font-medium text-ink tnum">{inr(pendingTotal)}</span> held
-            </span>
-            <Link href="/exceptions" className="text-sm font-medium text-primary hover:text-primary-dark">
-              View →
-            </Link>
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader title="Invoice pipeline" action={live ? <LiveTag /> : <MockTag />} />
-          <div className="flex gap-6 px-5 pb-2 pt-3">
-            <div>
-              <p className="text-xs text-muted">Overdue</p>
-              <p className="mt-0.5 text-xl font-semibold text-ink tnum">
-                {live ? (m?.overdue_count ?? 0) : dashboard.pipeline.overdue} ·{" "}
-                <span className="text-base">
-                  {live ? inrCompact(m?.overdue_total_inr ?? 0) : inrCompact(dashboard.pipeline.overdueValue)}
+          ) : metrics.error !== null ? (
+            <p className="px-5 pb-5 pt-3 text-sm text-amber-700">Exceptions could not be loaded. {metrics.error}</p>
+          ) : (
+            <>
+              <div className="flex gap-6 px-5 pb-2 pt-3">
+                <div>
+                  <p className="text-xs text-muted">Outstanding</p>
+                  <p className="mt-0.5 text-xl font-semibold text-ink tnum">{m?.exceptions_open ?? 0}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted">Overdue</p>
+                  <p className="mt-0.5 text-xl font-semibold text-money-out tnum">{m?.overdue_count ?? 0}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted">Due soon</p>
+                  <p className="mt-0.5 text-xl font-semibold text-ink tnum">{m?.due_soon_count ?? 0}</p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between border-t border-hairline px-5 py-3.5">
+                <span className="text-sm text-muted">
+                  Queue · <span className="font-medium text-ink tnum">{money(pendingTotal, m?.money_in_exceptions_currency ?? "INR")}</span> held
                 </span>
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted">Paid</p>
-              <p className="mt-0.5 text-xl font-semibold text-ink tnum">
-                {paidCount} · <span className="text-base">{inrCompact(paidValue)}</span>
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center justify-between border-t border-hairline px-5 py-3.5">
-            <span className="text-sm text-muted">
-              Open · {openCount} invoices ·{" "}
-              <span className="font-medium text-ink tnum">{inrCompact(openValue)}</span>
-            </span>
-            <Link href="/inbox" className="text-sm font-medium text-primary hover:text-primary-dark">
-              View →
-            </Link>
-          </div>
+                <Link href="/exceptions" className={linkCls}>
+                  View →
+                </Link>
+              </div>
+            </>
+          )}
         </Card>
 
         <Card>
-          <CardHeader title="Money movement" action={paymentsLive ? <LiveTag /> : <MockTag />} />
-          <div className="px-5 pb-2 pt-3">
-            <p className="text-xs text-muted">Paid · to date</p>
-            <p className="mt-0.5 text-xl font-semibold text-money-in tnum">
-              {paymentsLive ? inr(paidTotal) : inr(dashboard.moneyIn30d)}
+          <CardHeader title="Invoice pipeline" action={metrics.data !== null && invList.data !== null ? <LiveTag /> : undefined} />
+          {metrics.loading || invList.loading ? (
+            <div className="flex gap-6 px-5 pb-5 pt-3">
+              <Skeleton className="h-10 w-24" />
+              <Skeleton className="h-10 w-24" />
+            </div>
+          ) : metrics.error !== null || invList.error !== null ? (
+            <p className="px-5 pb-5 pt-3 text-sm text-amber-700">
+              Pipeline could not be loaded. {metrics.error ?? invList.error}
             </p>
-            <p className="mt-3 text-xs text-muted">Scheduled · outstanding</p>
-            <p className="mt-0.5 text-xl font-semibold text-money-out tnum">
-              −{paymentsLive ? inr(scheduledTotal) : inr(dashboard.moneyOut30d)}
+          ) : (
+            <>
+              <div className="flex gap-6 px-5 pb-2 pt-3">
+                <div>
+                  <p className="text-xs text-muted">Overdue</p>
+                  <p className="mt-0.5 text-xl font-semibold text-ink tnum">
+                    {m?.overdue_count ?? 0} ·{" "}
+                    <span className="text-base">{moneyCompact(m?.overdue_total_inr ?? 0, m?.overdue_total_currency ?? "INR")}</span>
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted">Paid</p>
+                  <p className="mt-0.5 text-xl font-semibold text-ink tnum">
+                    {paidCount} · <span className="text-base">{moneyCompact(paidValue, commonCurrency(paidInvoices.map((i) => i.currency)))}</span>
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between border-t border-hairline px-5 py-3.5">
+                <span className="text-sm text-muted">
+                  Open · {openCount} invoice{openCount === 1 ? "" : "s"} ·{" "}
+                  <span className="font-medium text-ink tnum">{moneyCompact(openValue, commonCurrency(openInvoices.map((i) => i.currency)))}</span>
+                </span>
+                <Link href="/inbox" className={linkCls}>
+                  View →
+                </Link>
+              </div>
+            </>
+          )}
+        </Card>
+
+        <Card>
+          <CardHeader title="Money movement" action={paymentList.data !== null ? <LiveTag /> : undefined} />
+          {paymentList.loading ? (
+            <div className="space-y-3 px-5 pb-5 pt-3">
+              <Skeleton className="h-8 w-40" />
+              <Skeleton className="h-8 w-40" />
+            </div>
+          ) : paymentList.error !== null ? (
+            <p className="px-5 pb-5 pt-3 text-sm text-amber-700">
+              Money movement could not be loaded. {paymentList.error}
             </p>
-          </div>
-          <div className="flex items-center justify-between border-t border-hairline px-5 py-3.5">
-            <span className="text-sm text-muted">
-              {paymentsLive ? (
-                <>
+          ) : (
+            <>
+              <div className="px-5 pb-2 pt-3">
+                <p className="text-xs text-muted">Paid · to date</p>
+                <p className="mt-0.5 text-xl font-semibold text-money-in">
+                  <BigMoney amount={paidTotal} currency={paidCurrency} />
+                </p>
+                <p className="mt-3 text-xs text-muted">Scheduled · outstanding</p>
+                <p className="mt-0.5 text-xl font-semibold text-money-out">
+                  {scheduledTotal > 0 ? "−" : ""}
+                  <BigMoney amount={scheduledTotal} currency={scheduledCurrency} />
+                </p>
+              </div>
+              <div className="flex items-center justify-between border-t border-hairline px-5 py-3.5">
+                <span className="text-sm text-muted">
                   {payments.length} payment{payments.length === 1 ? "" : "s"}
                   {nextPayment ? (
                     <>
@@ -316,17 +396,13 @@ export default function DashboardPage() {
                   ) : (
                     ""
                   )}
-                </>
-              ) : (
-                <>
-                  Net · <span className="font-medium text-ink tnum">{inr(dashboard.moneyIn30d - dashboard.moneyOut30d)}</span>
-                </>
-              )}
-            </span>
-            <Link href="/payments" className="text-sm font-medium text-primary hover:text-primary-dark">
-              View →
-            </Link>
-          </div>
+                </span>
+                <Link href="/payments" className={linkCls}>
+                  View →
+                </Link>
+              </div>
+            </>
+          )}
         </Card>
       </div>
 
@@ -336,8 +412,8 @@ export default function DashboardPage() {
           title="Recent invoices"
           action={
             <span className="flex items-center gap-2">
-              {live ? <LiveTag /> : <MockTag />}
-              <Link href="/inbox" className="text-sm font-medium text-primary hover:text-primary-dark">
+              {invList.data !== null && <LiveTag />}
+              <Link href="/inbox" className={linkCls}>
                 View all
               </Link>
             </span>
@@ -355,50 +431,68 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {live
-                ? realInvoices.slice(0, 5).map((inv) => (
-                    <tr key={inv.id} className="border-t border-hairline">
-                      <td className="px-3 py-3">
-                        <Link href={`/invoices/${inv.id}`} className="font-medium text-primary hover:text-primary-dark">
-                          {shortId(inv.id)}
-                        </Link>
-                        <span className="block text-xs text-muted">{inv.invoice_number || "—"}</span>
-                      </td>
-                      <td className="px-3 py-3 text-ink">{inv.vendor_name || "Unknown vendor"}</td>
-                      <td className="px-3 py-3 text-muted tnum">{formatDate(inv.invoice_date)}</td>
-                      <td className="px-3 py-3 text-right font-medium text-ink tnum">{inr(inv.total)}</td>
-                      <td className="px-3 py-3">
-                        <StatusPill status={inv.status as InvoiceStatus} />
-                      </td>
-                    </tr>
-                  ))
-                : mockInvoices.slice(0, 5).map((inv) => (
-                    <tr key={inv.id} className="border-t border-hairline">
-                      <td className="px-3 py-3">
-                        <Link href={`/invoices/${inv.id}`} className="font-medium text-primary hover:text-primary-dark">
-                          {inv.id}
-                        </Link>
-                        <span className="block text-xs text-muted">{inv.number}</span>
-                      </td>
-                      <td className="px-3 py-3 text-ink">{inv.vendor}</td>
-                      <td className="px-3 py-3 text-muted tnum">{formatDate(inv.invoiceDate)}</td>
-                      <td className="px-3 py-3 text-right font-medium text-ink tnum">{inr(inv.amount)}</td>
-                      <td className="px-3 py-3">
-                        <StatusPill status={inv.status} />
-                      </td>
-                    </tr>
-                  ))}
-              {recent.length === 0 && (
+              {invList.loading ? (
+                [0, 1, 2, 3, 4].map((i) => (
+                  <tr key={i} className="border-t border-hairline" aria-hidden="true">
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-4 w-24" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-4 w-32" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="ml-auto h-4 w-20" />
+                    </td>
+                    <td className="px-3 py-3">
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </td>
+                  </tr>
+                ))
+              ) : invList.error !== null ? (
                 <tr className="border-t border-hairline">
-                  <td colSpan={5} className="px-3 py-8 text-center text-sm text-muted">
-                    No invoices yet — upload one from the Inbox.
+                  <td colSpan={5} className="px-3 py-8 text-center text-sm text-amber-700">
+                    Invoices could not be loaded. {invList.error}
                   </td>
                 </tr>
+              ) : realInvoices.length === 0 ? (
+                <tr className="border-t border-hairline">
+                  <td colSpan={5} className="px-3 py-4">
+                    <EmptyState
+                      title="No invoices yet"
+                      body="Upload your first invoice and the agents will extract, match and queue it."
+                      ctaHref="/inbox"
+                      ctaLabel="Upload your first invoice"
+                    />
+                  </td>
+                </tr>
+              ) : (
+                realInvoices.slice(0, 5).map((inv) => (
+                  <tr key={inv.id} className="border-t border-hairline transition-colors duration-150 ease-out hover:bg-slate-50 motion-reduce:transition-none">
+                    <td className="px-3 py-3">
+                      <Link
+                        href={`/invoices/${inv.id}`}
+                        className="font-medium text-primary transition-colors duration-150 ease-out hover:text-primary-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none"
+                      >
+                        {shortId(inv.id)}
+                      </Link>
+                      <span className="block text-xs text-muted">{inv.invoice_number || "—"}</span>
+                    </td>
+                    <td className="px-3 py-3 text-ink">{inv.vendor_name || "Unknown vendor"}</td>
+                    <td className="px-3 py-3 text-muted tnum">{formatDate(inv.invoice_date)}</td>
+                    <td className="px-3 py-3 text-right font-medium text-ink tnum">{money(inv.total, inv.currency)}</td>
+                    <td className="px-3 py-3">
+                      <StatusPill status={inv.status} />
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
         </div>
-        {live && (
+        {invList.data !== null && metrics.data !== null && (
           <p className="border-t border-hairline px-5 py-2 text-xs text-muted">
             {realInvoices.length} invoice{realInvoices.length === 1 ? "" : "s"} in the backend ·{" "}
             {m?.total_invoices ?? 0} total · {m?.auto_approved ?? 0} auto-approved

@@ -22,6 +22,30 @@ const config: Config = {
         sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
+      // Mercury type scale (§10): headings 24–28px semibold, body 14px,
+      // small labels 12–13px, big figures 30–32px.
+      fontSize: {
+        display: ["28px", { lineHeight: "34px", fontWeight: "600", letterSpacing: "-0.01em" }],
+        "page-title": ["26px", { lineHeight: "32px", fontWeight: "600", letterSpacing: "-0.01em" }],
+        "section-title": ["15px", { lineHeight: "20px", fontWeight: "600", letterSpacing: "-0.01em" }],
+        figure: ["32px", { lineHeight: "36px", fontWeight: "600", letterSpacing: "-0.01em" }],
+        body: ["14px", { lineHeight: "20px", fontWeight: "400" }],
+        label: ["12px", { lineHeight: "16px", fontWeight: "500" }],
+        "label-sm": ["13px", { lineHeight: "18px", fontWeight: "400" }],
+      },
+      transitionDuration: {
+        150: "150ms",
+        200: "200ms",
+      },
+      keyframes: {
+        shimmer: {
+          "0%": { backgroundPosition: "-400px 0" },
+          "100%": { backgroundPosition: "400px 0" },
+        },
+      },
+      animation: {
+        shimmer: "shimmer 1.4s ease-in-out infinite",
+      },
       borderRadius: {
         card: "14px",
       },
